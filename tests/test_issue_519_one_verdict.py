@@ -1508,19 +1508,23 @@ def test_a_consensus_engine_that_starts_after_its_deadline_names_no_cause(monkey
 
 class _ScriptedClock:
     """The clock and the sleeps ``wait_out`` and ``wait_out_async`` use, for
-    the early-end tests. The clock reads zero, so a wait for a deadline
-    ahead of it ended early, and moves only when a sleep waits out the rest:
+    the early-end tests. The clock reads zero, so a real timer that ends its
+    wait finds the deadline still ahead, as a timer may by its clock's
+    resolution, and the clock moves only when a sleep waits out the rest:
     ``landing`` (the model's answer) runs 20 ms into that sleep, and the
-    sleep ends where it was asked to. No timer or thread is involved, so the
-    runner's speed cannot move the landing past the deadline. With
-    ``blocking`` False a blocking sleep fails the test: it would have held
-    the event loop."""
+    sleep ends where it was asked to. No timer or thread decides when the
+    answer lands, so the runner's speed cannot move it past the deadline.
+    With ``blocking`` False a blocking sleep fails the test, and is noted in
+    ``blocked``: it would have held the event loop. ``hold``, when set, is
+    awaited in the async sleep first: a real suspension there."""
 
     LANDS_AFTER_NS = 20_000_000
 
     def __init__(self, landing=None, blocking=True):
         self.now = 0
         self.slept = []
+        self.blocked = []
+        self.hold = None
         self._landing = landing
         self._blocking = blocking
 
@@ -1536,10 +1540,14 @@ class _ScriptedClock:
         self.now = started + round(seconds * 1_000_000_000)
 
     def sleep(self, seconds):
-        assert self._blocking, "a blocking sleep held the event loop"
+        if not self._blocking:
+            self.blocked.append(seconds)
+            raise AssertionError("a blocking sleep held the event loop")
         self._sleep_through(seconds)
 
     async def async_sleep(self, seconds):
+        if self.hold is not None:
+            await self.hold()
         self._sleep_through(seconds)
 
 
@@ -1552,6 +1560,32 @@ def _scripted_clock(landing=None, blocking=True):
         failure_cause, "asyncio", SimpleNamespace(sleep=clock.async_sleep), create=True
     ):
         yield clock
+
+
+@contextlib.contextmanager
+def _consensus_on(clock):
+    """The consensus module reading ``clock`` too, so the async collector's
+    remaining time comes from the same clock as its deadline, and its real
+    ``asyncio.wait_for`` timer runs for exactly that time. Yields the
+    timeouts that timer was given."""
+    from qwed_new.core import consensus_verifier
+
+    timers = []
+
+    async def _timer(awaitable, timeout):
+        timers.append(timeout)
+        return await asyncio.wait_for(awaitable, timeout)
+
+    # What the module reads of each, so a name it starts to read fails here.
+    clocked_time = SimpleNamespace(time=time.time, monotonic_ns=clock.monotonic_ns)
+    timed_asyncio = SimpleNamespace(
+        Future=asyncio.Future, TimeoutError=asyncio.TimeoutError, get_running_loop=asyncio.get_running_loop,
+        sleep=asyncio.sleep, to_thread=asyncio.to_thread, wait_for=_timer,
+    )
+    with mock.patch.object(consensus_verifier, "time", clocked_time), mock.patch.object(
+        consensus_verifier, "asyncio", timed_asyncio
+    ):
+        yield timers
 
 
 _EARLY_BOUND_NS = 100_000_000
@@ -1586,65 +1620,150 @@ def test_waiting_out_a_deadline_sleeps_only_the_rest_of_an_early_end(remaining):
             assert clock.slept == [], where
 
 
-def test_a_consensus_timeout_that_ends_early_counts_a_translation_that_lands_in_time():
-    # The wait ended before its deadline, as a timer may by its clock's
-    # resolution, and the model's answer lands before the deadline: it came
-    # in time, so the engine names no cause.
-    from qwed_new.core.consensus_verifier import _EngineCall, _timed_out
+def _consensus_with_one_stalled_engine(monkeypatch):
+    """A verifier with a breaker and one engine waiting for the model until
+    the test releases it. Each engine is running, its start noted, before
+    its timer starts, on every path."""
+    from qwed_new.core import consensus_verifier
 
-    call = _EngineCall(lambda *_args: None)
-    with _scripted_clock(landing=lambda: call.translations.append("answer")) as clock:
-        call.started_ns = clock.now
-        fields = _timed_out(call, 80_000_000)
+    monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.08)
+    verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=True)
+    monkeypatch.setattr(verifier, "_executor", _StartedExecutor(max_workers=2))
+    monkeypatch.setattr(consensus_verifier, "ThreadPoolExecutor", _StartedExecutor)
+    release = _Release()
+    call = _stalling_engine(release, "waiting")
+    monkeypatch.setattr(verifier, "_select_engines", lambda *_args: [("SymPy", call)])
+    monkeypatch.setattr(verifier, "_refused", lambda *_args: None)
+    return verifier, call, release
 
-    assert fields == {"translation": "answer"}
-    assert clock.slept
 
+@pytest.mark.parametrize("path", ["sequential", "parallel", "async"])
+def test_a_consensus_timeout_that_ends_early_counts_a_translation_that_lands_in_time(monkeypatch, path):
+    # The engine's own timer (the future's, the pool's, the event loop's)
+    # ends its wait with the deadline still ahead, as a timer may by its
+    # clock's resolution, and the model's answer lands before the deadline:
+    # it came in time, so the engine names no cause, and the breaker counts
+    # the timeout once. On the async path the rest of the deadline is slept
+    # on the event loop, without blocking it.
+    verifier, call, release = _consensus_with_one_stalled_engine(monkeypatch)
+    engines = [("SymPy", call)]
+    def _landing():
+        call.translations.append("answer")
 
-def test_the_async_consensus_collector_waits_out_an_early_end_without_blocking():
-    # The same early end on the async path: the collector runs on the event
-    # loop, so the rest is slept there without blocking it, and the answer
-    # that lands in time counts.
-    from qwed_new.core.consensus_verifier import ConsensusVerifier, _EngineCall
-
-    verifier = ConsensusVerifier(enable_circuit_breaker=False)
-    call = _EngineCall(lambda *_args: None)
-
-    async def _collect():
-        stalled = asyncio.get_running_loop().create_future()
+    with _scripted_clock(landing=_landing, blocking=path != "async") as clock, _consensus_on(clock) as timers:
         try:
-            return await verifier._collect_engine_results([("symbolic", stalled, call)], 80_000_000, 0)
+            if path == "sequential":
+                results = verifier._execute_sequential(QUESTION, engines)
+            elif path == "parallel":
+                results = verifier._execute_parallel(QUESTION, engines)
+            else:
+                results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=0.08)).verification_chain
         finally:
-            stalled.cancel()
+            release.set()
+    release.assert_not_expired()
 
-    with _scripted_clock(landing=lambda: call.translations.append("answer"), blocking=False) as clock:
-        call.started_ns = clock.now
-        (result,) = asyncio.run(_collect())
-
+    assert clock.blocked == []
+    (result,) = results
     assert result.status == "BLOCKED"
-    assert result.method == "timeout"
     assert result.cause is None
     assert result.translation == "answer"
     assert clock.slept
+    assert verifier.circuit_breaker.get_health("SymPy").total_failures == 1
+    if path == "async":
+        # The collector's real timer ran, for the time left on its clock.
+        assert timers == [0.08]
 
 
-def test_a_logic_deadline_that_ends_early_counts_an_answer_that_lands_in_time():
-    from qwed_new.core.control_plane import _logic_failure
+def test_a_cancel_at_the_async_wait_still_counts_the_timeout_once(monkeypatch):
+    # The wait on the event loop is a point where the request can be
+    # cancelled (a client that goes away): the timeout seen before it is
+    # still counted with the breaker, once.
+    verifier, _call, release = _consensus_with_one_stalled_engine(monkeypatch)
+
+    async def _cancelled_at_the_wait(clock):
+        reached = asyncio.Event()
+
+        async def _held():
+            reached.set()
+            await asyncio.Event().wait()
+
+        clock.hold = _held
+        request = asyncio.ensure_future(verifier.verify_async(QUESTION, timeout_seconds=0.08))
+        reaching = asyncio.ensure_future(reached.wait())
+        await asyncio.wait({request, reaching}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        reaching.cancel()
+        assert reached.is_set(), "the wait on the event loop was never reached"
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+
+    with _scripted_clock(blocking=False) as clock, _consensus_on(clock):
+        try:
+            asyncio.run(_cancelled_at_the_wait(clock))
+        finally:
+            release.set()
+    release.assert_not_expired()
+
+    assert clock.blocked == []
+    assert verifier.circuit_breaker.get_health("SymPy").total_failures == 1
+
+
+def test_a_logic_deadline_that_ends_early_counts_an_answer_that_lands_in_time(
+    client, isolated_audit_chain, monkeypatch, model,  # noqa: F811
+):
+    # The provider call's real timer ends with the deadline still ahead, and
+    # the bridge hands the model's answer over before the deadline: it came
+    # in time, so the stop is after the translation, BLOCKED with the
+    # pipeline's own cause, and the row keeps the answer and names the
+    # model. The rest of the deadline is slept on the event loop, without
+    # blocking it.
+    from qwed_new.core import control_plane
     from qwed_new.core.translation_record import Translation
 
-    answered = LandedTranslations()
-    answer = Translation("logic", {"claim": "x > 3"}, "ollama", MODEL)
-    with _scripted_clock(landing=lambda: answered.append(answer), blocking=False) as clock:
-        fields = asyncio.run(_logic_failure(asyncio.TimeoutError(), False, None, None, answered, 80_000_000))
-    assert fields["constraint_id"] == PIPELINE_ERROR
-    assert fields["translation_model"] == MODEL
-    assert clock.slept
+    monkeypatch.setattr(control_plane, "_PROVIDER_CALL_TIMEOUT_SECONDS", 0.08)
+    release = _Release()
+    hand_over = {}
+    provider_call = control_plane._run_provider_call
 
+    async def _releasing_once_it_ends(func, *args, on_translation, **kwargs):
+        hand_over["to"] = on_translation
+        try:
+            return await provider_call(func, *args, on_translation=on_translation, **kwargs)
+        finally:
+            release.set()
+
+    def _stalled(*_args, **_kwargs):
+        release.wait()
+        raise RuntimeError(f"released: {LEAK_MARKER}")
+
+    monkeypatch.setattr(control_plane, "_run_provider_call", _releasing_once_it_ends)
+    monkeypatch.setattr(model, "translate_logic", _stalled)
+    answer = Translation("logic", {"claim": "x > 3"}, "ollama", MODEL)
+    with _scripted_clock(landing=lambda: hand_over["to"](answer), blocking=False) as clock:
+        try:
+            response = _post(client, "logic", QUESTION)
+        finally:
+            release.set()
+    release.assert_not_expired()
+
+    assert clock.blocked == []
+    assert clock.slept
+    _assert_one_verdict(response, isolated_audit_chain, "BLOCKED", PIPELINE_ERROR)
+    (row,) = _rows(isolated_audit_chain)
+    assert row.raw_llm_output
+    assert MODEL in row.raw_llm_output
+
+
+def test_a_logic_failure_waits_only_for_a_provider_deadline_before_the_answer():
     # A timeout after the bridge returned, and an error that is not the
     # deadline's, are read at once, however close the deadline is.
-    for error, translated in ((asyncio.TimeoutError(), True), (RuntimeError("solver"), True), (RuntimeError("x"), False)):
+    from qwed_new.core.control_plane import _logic_failure
+
+    cases = ((asyncio.TimeoutError(), True), (RuntimeError("solver"), True), (RuntimeError("x"), False))
+    for error, translated in cases:
         with _scripted_clock(blocking=False) as clock:
             fields = asyncio.run(_logic_failure(error, translated, None, None, LandedTranslations(), 80_000_000))
+        assert clock.blocked == [], (error, translated)
         assert clock.slept == [], (error, translated)
         assert fields["constraint_id"] == PIPELINE_ERROR
 

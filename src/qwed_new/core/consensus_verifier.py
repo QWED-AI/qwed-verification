@@ -15,7 +15,7 @@ Enhanced Features:
 """
 
 from typing import List, Dict, Any, Optional, Tuple, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from decimal import Decimal
 import time
@@ -879,13 +879,14 @@ class ConsensusVerifier:
                 continue
             if timed_out:
                 # The pool is sized to the engine list, so an unfinished task
-                # at expiry was genuinely running past its budget — record it
-                # with the breaker.
-                latency_ms = (time.monotonic_ns() - mono_start_ns) // 1_000_000
-                fields = await _timed_out_async(call, deadline_ns)
-                results.append(self._blocked_engine_result(
-                    engine_name, "timeout", "Timeout", latency_ms=latency_ms, **fields,
-                ))
+                # at expiry was genuinely running past its budget: record it
+                # with the breaker now, before the wait below, where the
+                # request can be cancelled, so a timeout seen counts once.
+                blocked = self._blocked_engine_result(
+                    engine_name, "timeout", "Timeout",
+                    latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
+                )
+                results.append(replace(blocked, **await _timed_out_async(call, deadline_ns)))
                 continue
             self._record_engine_result(engine_name, result)
             results.append(result)
