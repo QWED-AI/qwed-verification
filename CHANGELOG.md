@@ -43,10 +43,13 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   `/verify/consensus`, `/verify/stats` and `/verify/fact` (with a provider
   named) `BLOCKED`, each with a message of its own. Each cause now has one
   verdict on every route, named in `constraint_id`, with an audit row, and
-  none is admitted.
+  none is admitted. `/verify/fact`, where the model only adds an advisory,
+  is the exception for a provider failing or running out of time (below).
   - `translation.no_provider` (no model configured, or a provider QWED does
     not know) and `translation.failed` (the provider failed or ran out of
-    time, or its translation could not be used) are `UNVERIFIABLE`.
+    time, or its translation could not be used) are `UNVERIFIABLE`. On
+    `/verify/fact` only the first applies: a provider failing there, or
+    running out of time, is set out below.
   - `security.input_refused` (the injection screen refused the caller's
     text), `security.output_refused` (the safety check refused the model's
     translation) and `policy.blocked` are `BLOCKED`.
@@ -56,18 +59,22 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - A refused question gets a fixed message. The screen's reason, which
     `/verify/logic`'s `error` and the `/verify/fact` message showed before,
     stays in the server log.
-  - A consensus in which every engine stopped for a translation cause is
-    `UNVERIFIABLE`, with `agreement_status: not_translated`. One whose
-    engines stopped for different causes, or for none, stays `BLOCKED`,
-    "all engines blocked", as before. An engine still waiting for the model
-    at its deadline is `translation.failed`; one that had not started names
-    no cause.
+  - A consensus in which every engine stopped for a translation cause, the
+    same one or not, is `UNVERIFIABLE`, with `agreement_status:
+    not_translated` and that cause (`translation.no_provider` where any
+    engine had no provider). One in which every engine was refused for the
+    same cause is `BLOCKED` with it. Any other mix, or an engine blocked for
+    no named cause, stays `BLOCKED`, "all engines blocked", as before. An
+    engine still waiting for the model at its deadline is
+    `translation.failed`; one that had not started names no cause.
   - Batch items have their route's verdict.
   - `QWED_PROVIDER_TIMEOUT` must be a finite number of seconds above zero,
     or the server does not start. Before, zero or less ended every provider
     call at once, and infinity bounded none.
-  - `/verify/fact` still answers 503 when its provider call runs out of
-    time (#671).
+  - On `/verify/fact`, the model only adds an advisory to the deterministic
+    verdict. A provider that fails at run time leaves that verdict, without
+    the advisory and with no cause, as before, and a provider call out of
+    time still answers 503 (#671).
   - Callers that read a cause from a route's status or message should read
     `constraint_id`.
 
