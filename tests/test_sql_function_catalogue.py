@@ -28,6 +28,7 @@ from qwed_new.core.sql_function_catalogue import (
     BUILT_IN_ONLY_IN,
     REACHING_TYPED_FUNCTIONS,
     TYPED_FUNCTIONS,
+    built_in_only_elsewhere,
 )
 from qwed_new.core.sql_verifier import KNOWN_VALUE_FUNCTIONS, SQLVerifier, external_reads
 from qwed_new.guards.sql_guard import SQLGuard
@@ -79,6 +80,28 @@ def test_no_kind_is_both_admitted_and_reaching():
 
 def test_a_kind_built_in_in_one_dialect_is_sorted():
     assert set(BUILT_IN_ONLY_IN) <= TYPED_FUNCTIONS | KNOWN_VALUE_FUNCTIONS
+
+
+@pytest.mark.parametrize("dialect, elsewhere", [
+    ("bigquery", False),
+    (" bigquery ", False),
+    ("bigquery, normalization_strategy=lowercase", False),
+    ("postgres", True),
+    ("mysql", True),
+    ("", True),
+    (None, True),
+    # A dialect name sqlglot does not resolve is not BigQuery.
+    ("BigQuery", True),
+    ("bigqurey", True),
+    ("big_query", True),
+    ("bigqu" + chr(0x435) + "ry", True),
+    ("bigquery" + chr(0x200B), True),
+])
+def test_st_geogpoint_is_built_in_only_in_bigquery(dialect, elsewhere):
+    for name in ("stgeogpoint", "st_geogpoint"):
+        assert built_in_only_elsewhere(name, dialect) is elsewhere
+    # A name not tied to one dialect is built in wherever it is listed.
+    assert built_in_only_elsewhere("abs", dialect) is False
 
 
 @pytest.mark.parametrize("name", ["find_in_set", "st_x", "st_y", "st_geogpoint"])
