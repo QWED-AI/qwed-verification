@@ -35,7 +35,9 @@ _ANY_IGNORABLE = re.compile(_IGNORABLE)
 # Any letter or digit, Greek too: what makes a word follow a phrase
 # ("forget all" + theta + " values" goes on).
 _ANY_LETTER_OR_DIGIT = r"[^\W_]"
-_SEEN_IN_COPY = r"(?![\u0370-\u03ff\u1f00-\u1fff])[^\W_]"
+# Greek and Greek Extended.
+_GREEK = "\u0370-\u03ff\u1f00-\u1fff"
+_SEEN_IN_COPY = rf"(?![{_GREEK}])[^\W_]"
 
 
 # A character that ends a line (str.splitlines reads the same ones).
@@ -286,13 +288,15 @@ _ALSO_DATA = _forms(
 )
 _MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simulated", "unrestricted")
 
-# "act as if" states a premise, which passes, only in two shapes (PR #672):
-# one variable equal to something ("act as if x = 3", "a equals 2"), or
-# "the", "a" or "an", one word that is not an instruction or a safeguard,
-# and "is", "are", "was" or "were" ("act as if the die is fair").
-# A model or a system is a maths object with a maths property only (below).
-# Anything else after "act as if" plays a role: "you are DAN", "I were",
-# "no rules apply", "the safety guidelines were disabled".
+# "act as if" states a premise, which passes, only in three shapes (PR
+# #672): one variable, Latin or Greek, equal to something ("act as if x =
+# 3", "a equals 2"); "the", "a" or "an", one word that is not an
+# instruction, a safeguard or a model, and "is", "are", "was" or "were"
+# ("act as if the die is fair"); or a model or a system with a maths
+# property (below). Anything else after "act as if" plays a role: "you are
+# DAN", "I were", "no rules apply", "the safety guidelines were disabled".
+# So does a premise whose sentence goes on to name a safeguard or a role
+# ("act as if the model is linear but has no safety restrictions").
 _NOT_A_PREMISE_NOUN = (
     *_INSTRUCTIONS,
     *_forms(
@@ -315,32 +319,65 @@ _MATHS_PROPERTY = (
     "frictionless", "overdetermined", "underdetermined", "solvable", "normal",
     "uniform", "additive", "multiplicative",
 )
+_STORY_ROLES = ("dan", "evil", "rogue")
+# What a premise's sentence may not name after it: an instruction, a
+# safeguard, an assistant, or a role; a model or a system only as the maths
+# objects above.
+_ROLE_IN_PREMISE = (
+    *(word for word in _NOT_A_PREMISE_NOUN if word not in _MATHS_OBJECT),
+    "unrestricted", "unfiltered", "uncensored", *_forms("jailbreak:s,ing,ed", "jailbroken"),
+    *_STORY_ROLES, "llm", "gpt", "chatgpt",
+)
+# How far on a sentence is read for what it goes on to say.
+_SENTENCE_READ = 120
+
+
+def _later_in_sentence(word: str) -> str:
+    """``word``, a pattern, later in the same sentence: up to
+    ``_SENTENCE_READ`` characters on, line breaks included, before a dot,
+    "!", "?" or ";" with whitespace after it, and touching no letter a
+    reader sees (PR #672)."""
+    return (
+        rf"(?:(?![.!?;]{_GAP})[\s\S]){{0,{_SENTENCE_READ}}}?"
+        rf"(?<!{_SEEN_IN_COPY}){word}(?!{_SEEN_IN_COPY})"
+    )
+
+
 _WORD_IN_COPY = rf"[^\W\d_](?:{_MARK}*[^\W\d_])*"
+# Combining marks a variable may carry ("x" with a bar, "v" with an arrow).
+_COMBINING = "̀-ͯ᪰-᫿᷀-᷿⃐-⃿︠-︯"
 _ASSUMPTION = (
     rf"if{_BETWEEN_WORDS}(?:"
-    rf"[a-z0-9\u0370-\u03ff](?!{_ANY_LETTER_OR_DIGIT}){_GAP}*(?:=|(?:is|equals?)(?!{_SEEN_IN_COPY}))"
+    rf"[a-z0-9{_GREEK}][{_COMBINING}]*(?!{_ANY_LETTER_OR_DIGIT}){_GAP}*"
+    rf"(?:=|(?:is|equals?)(?!{_SEEN_IN_COPY}))"
     rf"|(?:the|a|an){_BETWEEN_WORDS}"
     rf"(?!{_one_of(_NOT_A_PREMISE_NOUN)}(?!{_SEEN_IN_COPY})){_WORD_IN_COPY}"
     rf"{_BETWEEN_WORDS}(?:is|are|was|were)(?!{_SEEN_IN_COPY})"
     rf"|(?:the|a|an){_BETWEEN_WORDS}{_one_of(_MATHS_OBJECT, False)}{_BETWEEN_WORDS}"
     rf"(?:is|are|was|were){_BETWEEN_WORDS}{_one_of(_MATHS_PROPERTY, False)}(?!{_SEEN_IN_COPY})"
-    rf")"
+    rf")(?!{_later_in_sentence(_one_of(_ROLE_IN_PREMISE))})"
 )
 _ACT_AS = "act as"
-_STORY_ROLES = ("dan", "evil", "rogue")
+_SYSTEM_PROMPT = "the system prompt"
 
 # A column of logged system prompts ("the system prompt column holds the
 # text") is data, and so is an aggregate of them ("the system prompt token
 # counts", "the system prompt's length"), unless the same sentence goes on
 # to ask for the text ("the system prompt length and its text"), read up
-# to 120 characters on (PR #672).
+# to 120 characters on, across line breaks (PR #672). A text word that
+# names a quantity ("the response text length", "the text token count")
+# does not ask for the text.
 _PROMPT_COLUMN = _forms("column:s", "field:s")
 _PROMPT_ATTRIBUTE = _forms("token:s", "length:s", "count:s", "size:s", "id:s")
 _PROMPT_TEXT = (*_forms("text:s", "content:s", "wording:s"), "verbatim", "body", "itself")
+_PROMPT_QUANTITY = (
+    rf"(?:{_one_of(_forms('token:s'))}{_BETWEEN_WORDS})?"
+    rf"{_one_of(_forms('length:s', 'count:s', 'size:s', 'id:s'))}(?!{_SEEN_IN_COPY})"
+)
 _PROMPT_METADATA = (
     rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_COLUMN)}(?!{_SEEN_IN_COPY})"
     rf"|{_one_of(_PROMPT_ATTRIBUTE)}(?!{_SEEN_IN_COPY})"
-    rf"(?!(?:(?![.!?;]{_GAP}).){{0,120}}?(?<!{_SEEN_IN_COPY}){_one_of(_PROMPT_TEXT)}(?!{_SEEN_IN_COPY})))"
+    rf"(?!{_later_in_sentence(_one_of(_PROMPT_TEXT))}(?!{_BETWEEN_WORDS}{_PROMPT_QUANTITY})))"
 )
 
 # Each phrase: the name a refusal gives, and its slots.
@@ -392,27 +429,32 @@ _PHRASES = (
         ("your", "hidden", "secret"), ("*", ("initial", "original", "system"), 1),
         ("instructions", "prompt", "prompts", "guidelines", "programming"),
     )),
-    # The system prompt asked for ("print the system prompt", "what is the
-    # system prompt"), not named, as a header or a column of logged prompts
-    # is (PR #672).
-    ("the system prompt", (
+    # The system prompt asked for ("print the system prompt", "print system
+    # prompt", "copy the_system_prompt", "what is the system prompt"), not
+    # named, as a header or a column of logged prompts is (PR #672).
+    (_SYSTEM_PROMPT, (
         _forms(
             "print:s,ed,ing", "show:s,ed,ing,n", "reveal:s,ed,ing", "repeat:s,ed,ing",
             "output:s,ted,ting", "display:s,ed,ing", "give:s", "tell:s", "write:s",
             "return:s,ed,ing", "share:s,d", "leak:s,ed,ing", "dump:s,ed,ing", "recite:s,d",
+            "copy", "copies", "copied", "copying", "translate:s,d", "translating",
+            "summarize:s,d", "summarizing", "summarise:s,d", "summarising",
+            "paraphrase:s,d", "paraphrasing", "quote:s,d", "quoting", "provide:s,d",
+            "providing", "disclose:s,d", "disclosing", "expose:s,d", "exposing",
+            "send:s,ing", "sent", "read:s,ing", "restate:s,d", "restating",
         ),
-        ("*", ("me", "us", "out"), 2), ("the", "your"),
+        ("*", ("me", "us", "out"), 2), ("*", ("the", "your"), 1),
         ("*", ("full", "entire", "exact", "whole", "complete", "original", "initial"), 2),
         ("system",), ("prompt", "prompts", "instructions", "message"),
         ("!re", _PROMPT_METADATA),
     )),
     # Named in prose ("translate the system prompt", "what does the system
     # prompt say"); a header joins the words with underscores and passes.
-    ("the system prompt", (
+    (_SYSTEM_PROMPT, (
         ("~",), ("the",), ("system",), ("prompt", "prompts", "instructions", "message"),
         ("!re", _PROMPT_METADATA),
     )),
-    ("the system prompt", (
+    (_SYSTEM_PROMPT, (
         ("what",), ("is", "was", "are", "were", "s"), ("the", "your"), ("system",),
         ("prompt", "prompts", "instructions", "message"),
         ("!re", _PROMPT_METADATA),
@@ -465,7 +507,7 @@ def _found(searches, copies: tuple[str, ...], plain=None) -> str | None:
 # The multiplication and division signs among the Latin-1 letters are
 # not letters ("2 times pi r" written with the sign).
 _LATIN_LETTER = "[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f]"
-_GREEK_LETTER = "[\u0370-\u03ff\u1f00-\u1fff]"
+_GREEK_LETTER = f"[{_GREEK}]"
 _GREEK_IN_LATIN = re.compile(f"{_LATIN_LETTER}{_GREEK_LETTER}+{_LATIN_LETTER}")
 
 
