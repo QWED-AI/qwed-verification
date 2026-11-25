@@ -8,7 +8,9 @@ FIND_IN_SET, ST_X and ST_Y into their own kinds (``findinset``, ``stx`` and
 the same for BigQuery's ST_GEOGPOINT (``stgeogpoint``), which builds a
 point from a longitude and a latitude. Each computes only from its
 arguments, so each is admitted whichever way sqlglot reads it, and a near
-miss of the name is still refused.
+miss of the name is still refused. ST_GEOGPOINT is built in only in
+BigQuery; in any other dialect a bare call runs whatever routine the
+database holds under that name, so it is refused there.
 """
 
 import inspect
@@ -22,8 +24,12 @@ from sqlglot import exp, parse_one
 from sqlglot.dialects.dialect import Dialect, Dialects
 
 from qwed_new.core.diagnostics import admission_decision
-from qwed_new.core.sql_function_catalogue import REACHING_TYPED_FUNCTIONS, TYPED_FUNCTIONS
-from qwed_new.core.sql_verifier import KNOWN_VALUE_FUNCTIONS, SQLVerifier
+from qwed_new.core.sql_function_catalogue import (
+    BUILT_IN_ONLY_IN,
+    REACHING_TYPED_FUNCTIONS,
+    TYPED_FUNCTIONS,
+)
+from qwed_new.core.sql_verifier import KNOWN_VALUE_FUNCTIONS, SQLVerifier, external_reads
 from qwed_new.guards.sql_guard import SQLGuard
 
 DDL = "CREATE TABLE users (id INT, name TEXT, geom TEXT);"
@@ -71,25 +77,50 @@ def test_no_kind_is_both_admitted_and_reaching():
     assert not TYPED_FUNCTIONS & REACHING_TYPED_FUNCTIONS
 
 
+def test_a_kind_built_in_in_one_dialect_is_sorted():
+    assert set(BUILT_IN_ONLY_IN) <= TYPED_FUNCTIONS | KNOWN_VALUE_FUNCTIONS
+
+
 @pytest.mark.parametrize("name", ["find_in_set", "st_x", "st_y", "st_geogpoint"])
 def test_the_name_is_known_however_sqlglot_reads_it(name):
+    # The name is listed whichever sqlglot is installed: the server image
+    # pins one that reads these calls by name, while CI takes the newest.
+    assert name in KNOWN_VALUE_FUNCTIONS
     call = parse_one(name + "(a, b)").find(exp.Func)
-    if isinstance(call, exp.Anonymous):
-        assert name in KNOWN_VALUE_FUNCTIONS
-    else:
-        assert call.key in TYPED_FUNCTIONS
+    assert isinstance(call, exp.Anonymous) or call.key in TYPED_FUNCTIONS
 
 
 @pytest.mark.parametrize("query", [
     "SELECT ST_X(geom), ST_Y(geom) FROM users",
     "SELECT find_in_set('a', name) FROM users",
     "SELECT id FROM users WHERE FIND_IN_SET(name, 'a,b') > 0 ORDER BY st_x(geom)",
-    "SELECT ST_GEOGPOINT(id, 2.5) FROM users",
-    "SELECT ST_X(ST_GEOGPOINT(id, 2.5)), ST_Y(ST_GEOGPOINT(1, id)) FROM users",
 ])
 @pytest.mark.parametrize("dialect", DIALECTS)
 def test_the_sorted_calls_are_admitted(dialect, query):
     assert _verdicts(query, dialect) == ("ADMIT", "ADMIT", True)
+
+
+@pytest.mark.parametrize("query", [
+    "SELECT ST_GEOGPOINT(1, 2)",
+    "SELECT ST_GEOGPOINT(id, 2.5) FROM users",
+    "SELECT ST_X(ST_GEOGPOINT(id, 2.5)), ST_Y(ST_GEOGPOINT(1, id)) FROM users",
+])
+@pytest.mark.parametrize("dialect", DIALECTS + ["bigquery, normalization_strategy=lowercase"])
+def test_st_geogpoint_is_admitted_only_in_bigquery(dialect, query):
+    expected = ("ADMIT", "ADMIT", True) if dialect.startswith("bigquery") else ("BLOCKED", "BLOCKED", False)
+    assert _verdicts(query, dialect) == expected
+
+
+@pytest.mark.parametrize("dialect", DIALECTS + [None])
+def test_st_geogpoint_read_by_name_gets_the_same_verdict(dialect):
+    # Older sqlglot, the server image's pin among them, reads ST_GEOGPOINT
+    # as a call by name; build that call whichever sqlglot is installed.
+    query = parse_one("SELECT ST_GEOGPOINT(id, 2.5) FROM users", read=dialect)
+    query.find(exp.Func).replace(
+        exp.Anonymous(this="ST_GEOGPOINT", expressions=[exp.column("id"), exp.Literal.number(2.5)])
+    )
+    assert isinstance(query.find(exp.Func), exp.Anonymous)
+    assert (external_reads(query, dialect) == ([], [])) is (dialect == "bigquery")
 
 
 @pytest.mark.parametrize("dialect, query", [
@@ -153,6 +184,9 @@ def test_other_forms_of_the_same_call_are_admitted(dialect, query):
     ("postgres", "SELECT public.st_geogpoint(1, 2)"),
     ("bigquery", "SELECT * FROM ST_GEOGPOINT(1, 2)"),
     ("bigquery", "SELECT * FROM users, ST_GEOGPOINT(1, 2)"),
+    # Applied by name in ClickHouse, where it is not built in.
+    ("clickhouse", "SELECT * APPLY(st_geogpoint) FROM users"),
+    ("clickhouse", "SELECT * APPLY(ST_GEOGPOINT) FROM users"),
     ("mysql", "SELECT ST_GEOGPOINT(sleep(5), 1) FROM users"),
     ("duckdb", "SELECT ST_GEOGPOINT(getenv('HOME'), 1)"),
     ("bigquery", "SELECT ST_GEOGPOINT(AI.GENERATE('x'), 1)"),

@@ -209,9 +209,12 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   into a function kind of its own, which the catalogue had not sorted, so
   the test that guards the catalogue failed wherever 30.35.0 is installed.
   `ST_GEOGPOINT(longitude, latitude)` builds a point from its two
-  arguments, so `SQLVerifier` and `SQLGuard` now admit it, on 30.35.0 and
-  on older sqlglot, which reads it as a call by name. Before, it was refused
-  on every version.
+  arguments, so `SQLVerifier` and `SQLGuard` now admit it when the dialect
+  is BigQuery, on 30.35.0 and on older sqlglot, which reads it as a call by
+  name. Before, it was refused on every version.
+  - In any other dialect it stays refused: it is built in only in BigQuery,
+    so elsewhere a bare call runs whatever routine the database holds under
+    that name.
   - Still refused: a call through a dataset or schema, a quoted or misspelt
     name, use as a table, and any call inside the arguments that is refused
     on its own.

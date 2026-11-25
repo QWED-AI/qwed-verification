@@ -12,6 +12,8 @@ data to a model, read a secret or read a file.
 Kinds are ``Expression.key``: the class name in lower case.
 """
 
+import sqlglot
+
 # Kinds that read files, stages or secrets, send data to a model, build a
 # name from a string, or advance a sequence.
 REACHING_TYPED_FUNCTIONS = frozenset({
@@ -118,3 +120,25 @@ TYPED_FUNCTIONS = frozenset({
     "weightstring", "widthbucket", "xmlelement", "xmlget", "xmltable", "xor", "year",
     "yearofweek", "yearofweekiso", "zipf"
 })
+
+# Kinds above, and names an older sqlglot reads as calls by name, that are
+# built in only in one dialect. In any other, a bare call runs whatever
+# routine the database holds under that name, so it is refused there.
+BUILT_IN_ONLY_IN = {
+    "stgeogpoint": "bigquery",
+    "st_geogpoint": "bigquery",
+}
+
+
+def built_in_only_elsewhere(name: str, dialect: str | None) -> bool:
+    """Whether *name*, a kind or a call's name in lower case, is built in
+    only in a dialect that *dialect* neither is nor extends. A dialect that
+    does not resolve is none of them."""
+    home = BUILT_IN_ONLY_IN.get(name)
+    if home is None:
+        return False
+    try:
+        resolved = sqlglot.Dialect.get_or_raise(dialect)
+        return not isinstance(resolved, type(sqlglot.Dialect.get_or_raise(home)))
+    except Exception:  # noqa: BLE001 - an unknown dialect is not the one
+        return True

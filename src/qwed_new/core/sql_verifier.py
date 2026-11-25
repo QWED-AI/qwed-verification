@@ -30,7 +30,7 @@ from .sql_filter_check import (
     _unrestricted_or_operand,
     setting_dependent_tokens,
 )
-from .sql_function_catalogue import REACHING_TYPED_FUNCTIONS, TYPED_FUNCTIONS
+from .sql_function_catalogue import REACHING_TYPED_FUNCTIONS, TYPED_FUNCTIONS, built_in_only_elsewhere
 
 from .verification_context import VerificationContextDocument
 
@@ -415,18 +415,19 @@ def _table_reads(table: exp.Table) -> Tuple[List[str], List[str]]:
     return reads, unknown
 
 
-def _function_unknown(node: exp.Func) -> bool:
+def _function_unknown(node: exp.Func, dialect: str | None = None) -> bool:
     """Whether *node* is a call not known to compute only from its
     arguments: a call through a schema, package, object or type, a name
-    sqlglot does not know and that is not listed, or a kind not in the
-    catalogue."""
+    sqlglot does not know and that is not listed, a kind not in the
+    catalogue, or one built in only in another dialect."""
     if isinstance(node.parent, exp.Dot) and node.arg_key == "expression":
         return True
     if _SCOPE_RESOLUTIONS and isinstance(node.parent, _SCOPE_RESOLUTIONS) and node.arg_key == "expression":
         return True
     if isinstance(node, exp.Anonymous):
-        return str(node.name).lower() not in KNOWN_VALUE_FUNCTIONS | VALUE_TABLE_FUNCTIONS
-    return node.key not in TYPED_FUNCTIONS
+        name = str(node.name).lower()
+        return name not in KNOWN_VALUE_FUNCTIONS | VALUE_TABLE_FUNCTIONS or built_in_only_elsewhere(name, dialect)
+    return node.key not in TYPED_FUNCTIONS or built_in_only_elsewhere(node.key, dialect)
 
 
 def _in_family(dialect: Optional[str], family: str) -> bool:
@@ -452,12 +453,12 @@ def _applied_name_unknown(name: str, dialect: Optional[str]) -> bool:
     if not _PLAIN_NAME.fullmatch(name):
         return True
     if name.lower() in KNOWN_VALUE_FUNCTIONS:
-        return False
+        return built_in_only_elsewhere(name.lower(), dialect)
     try:
         call = sqlglot.parse_one(f"SELECT {name}(x)", read=dialect).find(exp.Func)
     except Exception:  # noqa: BLE001 - not a call sqlglot reads
         return True
-    return call is None or call.key in REACHING_TYPED_FUNCTIONS or _function_unknown(call)
+    return call is None or call.key in REACHING_TYPED_FUNCTIONS or _function_unknown(call, dialect)
 
 
 _DERIVED_ARGS = frozenset({"from", "from_", "joins"})
@@ -575,7 +576,7 @@ def external_reads(parsed: exp.Expression, dialect: Optional[str] = None) -> Tup
     for node in parsed.find_all(exp.Func):
         if node.key in REACHING_TYPED_FUNCTIONS:
             reads.append(f"'{node.key}' reaches outside the database")
-        elif _function_unknown(node):
+        elif _function_unknown(node, dialect):
             unknown.append(f"'{_label(node)}'")
     return list(dict.fromkeys(reads))[:MAX_REASONS], list(dict.fromkeys(unknown))[:MAX_REASONS]
 
