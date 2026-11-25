@@ -76,6 +76,13 @@ _LOOKALIKES = str.maketrans({
     "\u0585": "o", "\u057d": "u", "\u0570": "h", "\u0578": "n",
     # Latin letters outside ASCII that NFKC keeps
     "\u0131": "i", "\u0261": "g",
+    # IPA letters and small capitals, which no script check sees, as they
+    # are Latin (Sentry on PR #672)
+    "\u0251": "a", "\u0269": "i", "\u027e": "r", "\u028b": "v", "\u025b": "e",
+    "\u1d00": "a", "\u0299": "b", "\u1d04": "c", "\u1d05": "d", "\u1d07": "e", "\ua730": "f",
+    "\u0262": "g", "\u029c": "h", "\u026a": "i", "\u1d0a": "j", "\u1d0b": "k", "\u029f": "l",
+    "\u1d0d": "m", "\u0274": "n", "\u1d0f": "o", "\u1d18": "p", "\u0280": "r", "\ua731": "s",
+    "\u1d1b": "t", "\u1d1c": "u", "\u1d20": "v", "\u1d21": "w", "\u028f": "y", "\u1d22": "z",
 })
 
 
@@ -310,10 +317,13 @@ _INSTRUCTIONS = _forms(
 )
 # What a data question names too (orders, messages, text): an override only
 # after an earlier qualifier ("ignore all preceding orders").
+_RESTRICTION = "restriction:s"
+_CONSTRAINT = "constraint:s"
+_POLICY = "polic:y,ies"
 _ALSO_DATA = _forms(
     "order:s", "command:s", "context", "information", "assignment:s", "task:s",
-    "message:s", "training", "polic:y,ies", "text", "article:s", "document:s",
-    "constraint:s", "restriction:s",
+    "message:s", "training", _POLICY, "text", "article:s", "document:s",
+    _CONSTRAINT, _RESTRICTION,
 )
 _MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simulated", "unrestricted")
 
@@ -327,32 +337,20 @@ _MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simula
 # So does a premise whose sentence goes on to name a safeguard or a role
 # ("act as if the model is linear but has no safety restrictions"), or to
 # lift a limit or a rule (below), and one whose sentence runs on past the
-# read, 200 characters on. A premise is about no persona or role, and its
-# predicate is not a noun phrase ("act as if the persona is a hacker" plays
-# a role; Sentry on PR #672).
-_ROLE_NOUN = (
-    *_forms(
-        "persona:s", "character:s", "role:s", "user:s", "admin:s", "administrator:s",
-        "developer:s", "narrator:s",
-    ),
-    "identity", "personality",
-)
-# Of those, the nouns a maths question uses too ("the user enters", "the
-# character count") stay out of what a premise's sentence may not name.
-_ORDINARY_ROLE_NOUN = _forms("character:s", "role:s", "user:s", "developer:s")
+# read, 200 characters on. A premise is about no persona ("act as if the
+# persona is a hacker"; Sentry on PR #672), and its sentence names none
+# ("act as if the user is an admin"). A user, a character or a triangle in
+# a word problem passes, whatever its predicate ("the triangle is a right
+# triangle", "the user is eligible"; Devin).
+# Not "identity" or "character": "the identity matrix", "the character count".
+_ROLE_NOUN = (*_forms("persona:s", "admin:s", "administrator:s", "narrator:s"), "personality")
 _NOT_A_PREMISE_NOUN = (
     *_INSTRUCTIONS,
     *_forms(
-        "restriction:s", "constraint:s", "filter:s", "limit:s", "polic:y,ies",
+        _RESTRICTION, _CONSTRAINT, "filter:s", "limit:s", _POLICY,
         "guardrail:s", "model:s", "assistant:s", "bot:s", "chatbot:s", "system:s",
     ),
     "safety", "ai", *_ROLE_NOUN,
-)
-# What may not start a premise's predicate: a determiner or a word that
-# names someone or a part ("is a hacker", "is my assistant", "is now").
-_NOT_A_PREDICATE = (
-    "a", "an", "the", "my", "your", "our", "his", "her", "their", "its", "some",
-    "someone", "somebody", "now", "like", "called", "named", "playing", "acting", "pretending",
 )
 # "Model" and "system" name maths objects too: a premise about one passes
 # with a maths property after it ("act as if the model is linear", "the
@@ -373,17 +371,25 @@ _STORY_ROLES = ("dan", "evil", "rogue")
 # "subject to the constraint", "linear programming"; Devin and CodeRabbit
 # on PR #672): after a premise, a safeguard only when a word before one
 # lifts or owns it, in the plural ("no limits", "without any rules", "your
-# restrictions"; "no limit exists" is maths), or in the singular where maths
-# rarely uses it ("no restriction applies"; CodeRabbit), or the words after
-# it say it is gone ("the rules are lifted", "the rules no longer apply").
+# restrictions"; "no limit exists" is maths), or the words after it say it
+# is gone ("the rules are lifted", "the rules no longer apply"). In the
+# singular one counts only when it is about the model's replies ("no
+# restriction applies to your replies", "the rule does not apply to you";
+# CodeRabbit): "no restriction on y" and "the rule does not apply" are maths
+# (Devin).
 _MATHS_SAFEGUARD = (
-    *_forms("limit:s", "constraint:s", "restriction:s", "filter:s", "rule:s", "direction:s", "polic:y,ies"),
+    *_forms("limit:s", _CONSTRAINT, _RESTRICTION, "filter:s", "rule:s", "direction:s", _POLICY),
     "programming",
 )
 _SAFEGUARD_PLURAL = ("limits", "constraints", "restrictions", "filters", "rules", "directions", "policies")
-_LIFTED_NOUNS = (*_SAFEGUARD_PLURAL, "restriction", "rule", "filter", "policy")
+_SAFEGUARD_SINGULAR = ("limit", "constraint", "restriction", "filter", "rule", "direction", "policy")
+# Who a safeguard is about when it is the model's.
+_ABOUT_YOU = (
+    "you", "your", "yours", "me", "my", "reply", "replies", "answer", "answers",
+    "response", "responses", "output", "outputs",
+)
 _LIFTING = ("no", "without", "your", "my", "beyond", "free")
-_NO_LONGER_APPLY_NOUNS = ("rules", "restrictions", "restriction", "filters", "filter", "policies", "policy", "limits")
+_NO_LONGER_APPLY_NOUNS = ("rules", "restrictions", "filters", "policies", "limits")
 _NO_LONGER = (
     ("no", "longer"), ("do", "not"), ("does", "not"), ("don", "t"), ("doesn", "t"),
     ("never",), ("cannot",), ("can", "not"), ("can", "t"),
@@ -395,7 +401,7 @@ _GONE = ("lifted", "removed", "disabled", "off", "suspended", "waived", "gone", 
 _ROLE_IN_PREMISE = (
     *(
         word for word in _NOT_A_PREMISE_NOUN
-        if word not in (*_MATHS_OBJECT, *_MATHS_SAFEGUARD, *_ORDINARY_ROLE_NOUN)
+        if word not in (*_MATHS_OBJECT, *_MATHS_SAFEGUARD)
     ),
     "unrestricted", "unfiltered", "uncensored", *_forms("jailbreak:s,ing,ed", "jailbroken"),
     *_STORY_ROLES, "llm", "gpt", "chatgpt",
@@ -434,23 +440,33 @@ def _words_in_copy(words) -> str:
     return _BETWEEN_WORDS.join(_one_of((word,)) for word in words)
 
 
+_LIFTING_WORDS = rf"{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
+_NO_LONGER_WORDS = rf"(?:{'|'.join(_words_in_copy(words) for words in _NO_LONGER)})"
+_APPLY = ("apply", "applies", "applied")
+# "applies to your replies", "on your answers", "for you".
+_TO_YOU = (
+    rf"(?:{_one_of(_APPLY)}{_BETWEEN_WORDS})?{_one_of(('to', 'on', 'for', 'over'))}{_BETWEEN_WORDS}"
+    rf"{_one_of(_ABOUT_YOU)}"
+)
 _LIFTED_SAFEGUARD = (
-    rf"(?:{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
-    rf"{_one_of(_LIFTED_NOUNS)}"
+    rf"(?:{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
+    rf"|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_SINGULAR)}{_BETWEEN_WORDS}{_TO_YOU}"
     rf"|{_one_of(_MATHS_SAFEGUARD)}{_BETWEEN_WORDS}"
     rf"{_one_of(('is', 'are', 'was', 'were', 'be', 'been', 'being', 'get', 'gets', 'got'))}{_BETWEEN_WORDS}"
     rf"(?:{_one_of(('turned', 'switched'))}{_BETWEEN_WORDS})?{_one_of(_GONE)}"
-    rf"|{_one_of(_NO_LONGER_APPLY_NOUNS)}{_BETWEEN_WORDS}"
-    rf"(?:{'|'.join(_words_in_copy(words) for words in _NO_LONGER)}){_BETWEEN_WORDS}"
-    rf"{_one_of(('apply', 'applies', 'matter', 'matters', 'count', 'counts'))})"
+    rf"|{_one_of(_NO_LONGER_APPLY_NOUNS)}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}{_BETWEEN_WORDS}"
+    rf"{_one_of((*_APPLY, 'matter', 'matters', 'count', 'counts'))}"
+    rf"|{_one_of(_SAFEGUARD_SINGULAR)}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}{_BETWEEN_WORDS}{_TO_YOU})"
 )
-# "and you are a hacker" after a premise gives a role (Sentry on PR #672);
-# "you are given" does not.
+# "and you are my assistant" or "you are no longer bound" after a premise
+# gives a role (Sentry on PR #672); "you are given", "you are the first to
+# spin" and "you are now able" do not (Devin).
 _YOU_ARE_SOMEONE = (
     rf"{_one_of(('you',))}{_BETWEEN_WORDS}"
     rf"(?:{_one_of(('are', 're', 'were', 'become', 'becomes'))}|{_words_in_copy(('will', 'be'))}"
     rf"|{_words_in_copy(('shall', 'be'))}){_BETWEEN_WORDS}"
-    rf"{_one_of(('a', 'an', 'the', 'my', 'your', 'now', 'no', 'someone', 'somebody', 'playing', 'acting', 'pretending'))}"
+    rf"(?:{_one_of(('my', 'your', 'our', 'someone', 'somebody', 'playing', 'acting', 'pretending', 'roleplaying'))}"
+    rf"|{_words_in_copy(('no', 'longer'))})"
 )
 _AFTER_A_PREMISE = rf"(?:{_one_of(_ROLE_IN_PREMISE)}|{_LIFTED_SAFEGUARD}|{_YOU_ARE_SOMEONE})"
 # Combining marks a variable may carry ("x" with a bar, "v" with an arrow).
@@ -462,7 +478,6 @@ _ASSUMPTION = (
     rf"|(?:the|a|an){_BETWEEN_WORDS}"
     rf"(?!{_one_of(_NOT_A_PREMISE_NOUN)}(?!{_SEEN_IN_COPY})){_WORD_IN_COPY}"
     rf"{_BETWEEN_WORDS}(?:is|are|was|were)(?!{_SEEN_IN_COPY})"
-    rf"(?!{_BETWEEN_WORDS}{_one_of(_NOT_A_PREDICATE)}(?!{_SEEN_IN_COPY}))"
     rf"|(?:the|a|an){_BETWEEN_WORDS}{_one_of(_MATHS_OBJECT, False)}{_BETWEEN_WORDS}"
     rf"(?:is|are|was|were){_BETWEEN_WORDS}{_one_of(_MATHS_PROPERTY, False)}(?!{_SEEN_IN_COPY})"
     rf"){_sentence_ends_without(_AFTER_A_PREMISE)}"
@@ -493,9 +508,18 @@ _PROMPT_AGGREGATE = (
     rf"(?:(?:{_one_of(_PROMPT_UNIT)}{_BETWEEN_WORDS})?{_one_of(_PROMPT_MEASURE)}"
     rf"|{_one_of(_PROMPT_ATTRIBUTE)})(?!{_SEEN_IN_COPY})"
 )
+_TEXT_NOT_ASKED = _sentence_ends_without(_one_of(_PROMPT_TEXT), _NOT_A_QUANTITY)
 _PROMPT_METADATA = (
     rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_COLUMN)}(?!{_SEEN_IN_COPY})"
-    rf"|{_PROMPT_AGGREGATE}{_sentence_ends_without(_one_of(_PROMPT_TEXT), _NOT_A_QUANTITY)})"
+    rf"|{_PROMPT_AGGREGATE}{_TEXT_NOT_ASKED})"
+)
+# In a request, a column or a field is data only when the sentence then asks
+# for no text ("print the system prompt column and its text"; CodeRabbit on
+# PR #672); named in prose, it stays data ("the system prompt column holds
+# the text").
+_PROMPT_METADATA_ASKED = (
+    rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_COLUMN)}(?!{_SEEN_IN_COPY})|{_PROMPT_AGGREGATE})"
+    rf"{_TEXT_NOT_ASKED}"
 )
 # What may ask for the system prompt: the verbs of a request, in any form,
 # and their bare forms; "write" asks for new ones ("Write system prompts
@@ -523,6 +547,9 @@ _REQUEST_LEADS = (
 _TO_ME = ("*", ("me", "us", "out"), 2)
 _WHOLE = ("*", ("full", "entire", "exact", "whole", "complete", "original", "initial"), 2)
 _PROMPT_NOUNS = ("prompt", "prompts", "instructions", "message")
+# With no "the", "system messages" are often a log's ("Next, read system
+# messages from the application log"; Devin on PR #672).
+_BARE_PROMPT_NOUNS = ("prompt", "prompts", "instructions")
 
 # Each phrase: the name a refusal gives, and its slots.
 _PHRASES = (
@@ -578,7 +605,7 @@ _PHRASES = (
     # header or a column of logged prompts is (PR #672).
     (_SYSTEM_PROMPT, (
         _REQUEST_VERBS, _TO_ME, ("the", "your"), _WHOLE, ("system",), _PROMPT_NOUNS,
-        ("!re", _PROMPT_METADATA),
+        ("!re", _PROMPT_METADATA_ASKED),
     )),
     # With no "the" or "your", only a request asks (gitar on PR #672): a
     # bare verb at a sentence's start, after "then", "and", "now" or another
@@ -589,27 +616,27 @@ _PHRASES = (
     # prompts", "If you send system prompts" and "Researchers collect and
     # share system prompts" tell, and pass.
     (_SYSTEM_PROMPT, (
-        ("^",), ("*", _REQUEST_LEADS, 2), _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _PROMPT_NOUNS,
-        ("!re", _PROMPT_METADATA),
+        ("^",), ("*", _REQUEST_LEADS, 2), _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",),
+        _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
     )),
     (_SYSTEM_PROMPT, (
         ("please", "kindly", "pls", "plz"), _REQUEST_IMPERATIVES, _TO_ME, _WHOLE,
-        ("system",), _PROMPT_NOUNS, ("!re", _PROMPT_METADATA),
+        ("system",), _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
     )),
     (_SYSTEM_PROMPT, (
         ("can", "could", "would", "will"), ("you", "u"), ("*", ("please", "kindly", "just"), 1),
-        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _PROMPT_NOUNS, ("!re", _PROMPT_METADATA),
+        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
     )),
     (_SYSTEM_PROMPT, (
         (",",), ("then", "and", "also", "now"), ("*", ("please", "kindly", "just"), 1),
-        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _PROMPT_NOUNS, ("!re", _PROMPT_METADATA),
+        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
     )),
     # Named in prose ("translate the system prompt", "what does the system
     # prompt say"); a header joins the words with underscores and passes.
     (_SYSTEM_PROMPT, (("~",), ("the",), ("system",), _PROMPT_NOUNS, ("!re", _PROMPT_METADATA))),
     (_SYSTEM_PROMPT, (
         ("what",), ("is", "was", "are", "were", "s"), ("the", "your"), ("system",), _PROMPT_NOUNS,
-        ("!re", _PROMPT_METADATA),
+        ("!re", _PROMPT_METADATA_ASKED),
     )),
     ("your rules", (("your",), ("rules",))),
     ("new instructions", (("new",), ("instructions",))),
@@ -900,16 +927,20 @@ class EnhancedSecurityGateway:
                 # Not valid Base64 or not decodable, continue
                 pass
 
-        # Every decoded piece read once, joined by ". ", which ends a
-        # sentence: no phrase, exclusion or sentence start runs from one
-        # piece into the next, so each is read as it would be alone, and
-        # a text of many pieces costs one read (PR #672). The read is
-        # outside the try, so an error in it is not taken for bad Base64.
+        # Every decoded piece read on its own, where it starts a text, and
+        # all of them joined by ". ", which ends a sentence, so a phrase
+        # split across two pieces is read too. A piece read only in the join
+        # starts after a sentence's end, not a text's start, where a
+        # bracketed list item does not start a sentence ("[1] act as";
+        # CodeRabbit on PR #672). The join is read only where it fits the
+        # length bound, so pieces that fit alone are not refused for their
+        # sum. The reads are outside the try, so an error in one is not
+        # taken for bad Base64.
         if pieces:
             joined = ". ".join(pieces)
-            # Read one by one where the join passes the length bound, so two
-            # pieces that fit alone are not refused for their sum (PR #672).
-            readings = [joined] if _phrase_copies(joined) is not None else pieces
+            readings = list(pieces)
+            if _phrase_copies(joined) is not None:
+                readings.insert(0, joined)
             if any(self._contains_injection_keywords(text) for text in readings):
                 return False, "Base64-encoded injection payload detected"
 
@@ -966,8 +997,13 @@ class EnhancedSecurityGateway:
         # Greek letters are mathematical symbols (theta, the zeta function,
         # TGF-beta, d theta, 2k pi), so a Greek letter that is not inside a
         # Latin word is not mixing (#646). One inside a Latin word ("instru"
-        # + lunate sigma + "tions") is, as on main.
-        if 'greek' in scripts and not _GREEK_IN_LATIN.search(_seen_letters(text)):
+        # + lunate sigma + "tions") is, as on main. Greek beside any script
+        # but Latin is mixing, as on main (CodeRabbit on PR #672).
+        if (
+            'greek' in scripts
+            and scripts <= {'greek', 'latin'}
+            and not _GREEK_IN_LATIN.search(_seen_letters(text))
+        ):
             scripts.discard('greek')
 
         # If more than one script, it's suspicious
