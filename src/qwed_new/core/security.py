@@ -249,7 +249,9 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
     or none; ``("*", words, n)`` up to ``n``. A last slot written ``("!", words)`` holds none of them: the
     phrase is not found when one of ``words`` follows it ("you are now
     able"); written ``("!",)``, no word may follow it ("forget all.");
-    written ``("!re", pattern)``, ``pattern`` may not follow it. A
+    written ``("!re", pattern)``, ``pattern`` may not follow it. A last
+    slot written ``("=", words)`` holds one of ``words`` as written, with
+    no English ending. A
     first slot written ``("^",)`` puts the phrase at the start of the text,
     after a sentence's end ("Act as a terminal."), or at a line's start
     when the line before does not end with a letter or a comma, as a
@@ -264,6 +266,9 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
     if slots[-1][0] in ("!", "!re"):
         unless = _following(slots[-1], between, read_through)
         slots = slots[:-1]
+    exact = slots[-1][0] == "="
+    if exact:
+        slots = (*slots[:-1], slots[-1][1])
     start = ""
     if slots[0] == ("^",):
         start = _sentence_start(read_through)
@@ -275,7 +280,9 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
     body = "".join(_slot(slot, between, read_through) for slot in slots)
     # The last word may take an English ending ("modes", "prompted"), read
     # through ignorables the same way ("prompte<U+200B>d").
-    body = body[: -len(between)] + (_ENDING if read_through else _PLAIN_ENDING)
+    body = body[: -len(between)]
+    if not exact:
+        body += _ENDING if read_through else _PLAIN_ENDING
     if whole_words:
         body = rf"(?<!{_SEEN_IN_COPY}){body}(?!{_SEEN_IN_COPY})"
     return re.compile(start + body + unless, re.IGNORECASE)
@@ -383,10 +390,11 @@ _MATHS_SAFEGUARD = (
 )
 _SAFEGUARD_PLURAL = ("limits", "constraints", "restrictions", "filters", "rules", "directions", "policies")
 _SAFEGUARD_SINGULAR = ("limit", "constraint", "restriction", "filter", "rule", "direction", "policy")
-# Who a safeguard is about when it is the model's.
-_ABOUT_YOU = (
-    "you", "your", "yours", "me", "my", "reply", "replies", "answer", "answers",
-    "response", "responses", "output", "outputs",
+# What a safeguard is about when it is the model's: you, or your replies;
+# "your variable y" is a maths operand (CodeRabbit on PR #672).
+_REPLIES = (
+    *_forms("reply", "replies", "answer:s", "response:s", "output:s", "message:s"),
+    "behaviour", "behavior",
 )
 _LIFTING = ("no", "without", "your", "my", "beyond", "free")
 _NO_LONGER_APPLY_NOUNS = ("rules", "restrictions", "filters", "policies", "limits")
@@ -413,15 +421,24 @@ _SENTENCE_READ = 200
 _SENTENCE_END = rf"[.!?;][\"'\u201d\u2019)\]]{{0,3}}(?:{_GAP}|\Z)"
 
 
-def _sentence_ends_without(word: str, unless: str = "") -> str:
+def _sentence_ends_without(word: str, unless: str = "", skip: str = "") -> str:
     """A lookahead: the rest of the sentence names no ``word``, a pattern
     touching no letter a reader sees, with no ``unless`` after it, and the
     sentence or the text ends within ``_SENTENCE_READ`` characters, line
     breaks included. A sentence that runs on further fails closed, as
-    what it goes on to say is not read (CodeRabbit on PR #672)."""
+    what it goes on to say is not read (CodeRabbit on PR #672). Words that
+    ``skip`` matches are passed over whole, and not read for ``word``: the
+    group and its back-reference take them once, with no way back in, and
+    no character-by-character read starts where they do, so each place has
+    one way to be read and a failed read costs what a passing one does
+    (two ways at each, with ``skip`` read and not, cost the power of two of
+    their number)."""
     named = rf"(?<!{_SEEN_IN_COPY}){word}(?!{_SEEN_IN_COPY}){unless}"
+    step = rf"(?!{_SENTENCE_END})(?!{named})[\s\S]"
+    if skip:
+        step = rf"(?=(?P<skipped>{skip}))(?P=skipped)|(?!{skip}){step}"
     return (
-        rf"(?=(?:(?!{_SENTENCE_END})(?!{named})[\s\S]){{0,{_SENTENCE_READ}}}"
+        rf"(?=(?:{step}){{0,{_SENTENCE_READ}}}"
         rf"(?:{_SENTENCE_END}|\Z))"
     )
 
@@ -440,13 +457,17 @@ def _words_in_copy(words) -> str:
     return _BETWEEN_WORDS.join(_one_of((word,)) for word in words)
 
 
+_ABOUT_YOU = (
+    rf"(?:{_one_of(('you', 'yours', 'me'))}"
+    rf"|(?:{_one_of(('your', 'my'))}{_BETWEEN_WORDS}(?:{_WORD_IN_COPY}{_BETWEEN_WORDS})?)?{_one_of(_REPLIES)})"
+)
 _LIFTING_WORDS = rf"{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
 _NO_LONGER_WORDS = rf"(?:{'|'.join(_words_in_copy(words) for words in _NO_LONGER)})"
 _APPLY = ("apply", "applies", "applied")
 # "applies to your replies", "on your answers", "for you".
 _TO_YOU = (
     rf"(?:{_one_of(_APPLY)}{_BETWEEN_WORDS})?{_one_of(('to', 'on', 'for', 'over'))}{_BETWEEN_WORDS}"
-    rf"{_one_of(_ABOUT_YOU)}"
+    rf"{_ABOUT_YOU}"
 )
 _LIFTED_SAFEGUARD = (
     rf"(?:{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
@@ -508,7 +529,17 @@ _PROMPT_AGGREGATE = (
     rf"(?:(?:{_one_of(_PROMPT_UNIT)}{_BETWEEN_WORDS})?{_one_of(_PROMPT_MEASURE)}"
     rf"|{_one_of(_PROMPT_ATTRIBUTE)})(?!{_SEEN_IN_COPY})"
 )
-_TEXT_NOT_ASKED = _sentence_ends_without(_one_of(_PROMPT_TEXT), _NOT_A_QUANTITY)
+# A text word after "by", "per", "where" and the like, with up to two
+# words between that are not "its" or "their", names another field ("grouped
+# by response body"; Devin on PR #672), not the prompt's text.
+# Not "vs" or "against": a comparison may ask for the text.
+_FIELD_LEADS = ("by", "per", "where", "each", "across")
+_OTHER_FIELD = (
+    rf"(?<!{_SEEN_IN_COPY}){_one_of(_FIELD_LEADS)}{_BETWEEN_WORDS}"
+    rf"(?:(?!{_one_of(('its', 'their', 'your', 'his', 'her'))}(?!{_SEEN_IN_COPY})){_WORD_IN_COPY}"
+    rf"{_BETWEEN_WORDS}){{0,2}}{_one_of(_PROMPT_TEXT)}(?!{_SEEN_IN_COPY})"
+)
+_TEXT_NOT_ASKED = _sentence_ends_without(_one_of(_PROMPT_TEXT), _NOT_A_QUANTITY, _OTHER_FIELD)
 _PROMPT_METADATA = (
     rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_COLUMN)}(?!{_SEEN_IN_COPY})"
     rf"|{_PROMPT_AGGREGATE}{_TEXT_NOT_ASKED})"
@@ -547,9 +578,19 @@ _REQUEST_LEADS = (
 _TO_ME = ("*", ("me", "us", "out"), 2)
 _WHOLE = ("*", ("full", "entire", "exact", "whole", "complete", "original", "initial"), 2)
 _PROMPT_NOUNS = ("prompt", "prompts", "instructions", "message")
-# With no "the", "system messages" are often a log's ("Next, read system
-# messages from the application log"; Devin on PR #672).
-_BARE_PROMPT_NOUNS = ("prompt", "prompts", "instructions")
+# With no "the", a request read from logged data is data ("Next, read
+# system messages from the application log"; Devin on PR #672), and only
+# that: "Print system message" still asks (gitar and CodeRabbit).
+_LOGGED_DATA = _forms(
+    "log:s", "logfile:s", "file:s", "csv:s", "table:s", "dataset:s", "database:s", "export:s",
+    "record:s", "spreadsheet:s", "sheet:s", "trace:s",
+)
+_FROM_LOGGED_DATA = (
+    rf"{_one_of(('from', 'in', 'of', 'within', 'inside'))}{_BETWEEN_WORDS}"
+    rf"(?:{_one_of(('the', 'a', 'an', 'our', 'this', 'that', 'these', 'those', 'each', 'every', 'all'))}"
+    rf"{_BETWEEN_WORDS})?(?:{_WORD_IN_COPY}{_BETWEEN_WORDS}){{0,2}}{_one_of(_LOGGED_DATA)}(?!{_SEEN_IN_COPY})"
+)
+_BARE_METADATA = rf"(?:{_PROMPT_METADATA_ASKED}|{_FROM_LOGGED_DATA})"
 
 # Each phrase: the name a refusal gives, and its slots.
 _PHRASES = (
@@ -617,19 +658,19 @@ _PHRASES = (
     # share system prompts" tell, and pass.
     (_SYSTEM_PROMPT, (
         ("^",), ("*", _REQUEST_LEADS, 2), _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",),
-        _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
+        _PROMPT_NOUNS, ("!re", _BARE_METADATA),
     )),
     (_SYSTEM_PROMPT, (
         ("please", "kindly", "pls", "plz"), _REQUEST_IMPERATIVES, _TO_ME, _WHOLE,
-        ("system",), _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
+        ("system",), _PROMPT_NOUNS, ("!re", _BARE_METADATA),
     )),
     (_SYSTEM_PROMPT, (
         ("can", "could", "would", "will"), ("you", "u"), ("*", ("please", "kindly", "just"), 1),
-        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
+        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _PROMPT_NOUNS, ("!re", _BARE_METADATA),
     )),
     (_SYSTEM_PROMPT, (
         (",",), ("then", "and", "also", "now"), ("*", ("please", "kindly", "just"), 1),
-        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _BARE_PROMPT_NOUNS, ("!re", _PROMPT_METADATA_ASKED),
+        _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _PROMPT_NOUNS, ("!re", _BARE_METADATA),
     )),
     # Named in prose ("translate the system prompt", "what does the system
     # prompt say"); a header joins the words with underscores and passes.
@@ -652,7 +693,8 @@ _MATHS_WORDS = (
     ("jailbreak", (_forms("jailbreak:s,ing,ed", "jailbroken"),)),
     ("sudo", (("sudo",),)),
     ("roleplay", (_forms("roleplay:s,ing,ed"),)),
-    ("role play", (("role",), _forms("play:s,ing"))),
+    # Not "played": "the role played by sample size" (Sentry on PR #672).
+    ("role play", (("role",), ("=", ("play", "plays", "playing")))),
 )
 
 
@@ -997,11 +1039,13 @@ class EnhancedSecurityGateway:
         # Greek letters are mathematical symbols (theta, the zeta function,
         # TGF-beta, d theta, 2k pi), so a Greek letter that is not inside a
         # Latin word is not mixing (#646). One inside a Latin word ("instru"
-        # + lunate sigma + "tions") is, as on main. Greek beside any script
-        # but Latin is mixing, as on main (CodeRabbit on PR #672).
+        # + lunate sigma + "tions") is, as on main. Greek beside Arabic or
+        # Cyrillic is mixing, as on main (CodeRabbit on PR #672); beside CJK,
+        # which may stand with Latin, it is notation ("sin theta" in a
+        # Chinese question; gitar).
         if (
             'greek' in scripts
-            and scripts <= {'greek', 'latin'}
+            and scripts <= {'greek', 'latin', 'cjk'}
             and not _GREEK_IN_LATIN.search(_seen_letters(text))
         ):
             scripts.discard('greek')
