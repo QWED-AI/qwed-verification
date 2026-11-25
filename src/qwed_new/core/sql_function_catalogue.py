@@ -1,6 +1,6 @@
 """
 The functions sqlglot parses into a known expression, as of sqlglot 28.0.0,
-30.31.0 and 30.34.0, sorted into those that stay inside the database and
+30.31.0, 30.34.0 and 30.35.0, sorted into those that stay inside the database and
 those that reach outside it (GHSA-wgcp-398q-m296).
 
 SQLVerifier and SQLGuard admit a function sqlglot knows only when its kind
@@ -97,7 +97,8 @@ TYPED_FUNCTIONS = frozenset({
     "sha1digest", "sha2", "sha2digest", "shuffle", "sign", "sin", "sinh", "skewness",
     "sortarray", "soundex", "soundexp123", "space", "split", "splitpart", "splittotable",
     "sqrt", "stack", "standardhash", "starmap", "startswith", "stddev", "stddevpop",
-    "stddevsamp", "stdistance", "stpoint", "string", "stringtoarray", "stripnullvalue",
+    "stddevsamp", "stdistance", "stgeogpoint", "stpoint", "string", "stringtoarray",
+    "stripnullvalue",
     "strposition", "strtodate", "strtok", "strtoksplittotable", "strtoktoarray", "strtomap",
     "strtotime", "strtounix", "struct", "structextract", "stuff", "stx", "sty",
     "substring", "substringindex",

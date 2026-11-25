@@ -306,6 +306,8 @@ KNOWN_VALUE_FUNCTIONS = frozenset({
     # Snowflake
     "hash", "ratio_to_report", "to_timestamp_ntz", "to_timestamp_ltz", "to_timestamp_tz", "try_to_number",
     "try_to_date", "try_to_timestamp", "uniform", "seq1", "seq2", "seq4", "seq8",
+    # BigQuery
+    "st_geogpoint",
     # Hive and Spark
     "date_format", "from_unixtime", "size", "collect_list", "collect_set", "get_json_object", "from_json",
     "named_struct", "sort_array", "element_at", "array_contains", "posexplode", "explode", "pmod",
