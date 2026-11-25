@@ -176,20 +176,35 @@ def _following(slot, between: str, read_through: bool) -> str:
     return rf"(?!{between}{follower})"
 
 
+# A list item's marker (Sentry on PR #672): a bullet, a dash or a heading
+# mark, or a number, a letter or a roman numeral with a dot or a bracket
+# ("1)", "a.", "(iv)"). A sentence starts after one at a line's start, and
+# after a sentence's end after a bullet, a dash or a number with a dot or a
+# bracket ("Solve it. 2) Act as"), not a bracketed one ("Eq. (2) act as").
+_ITEM_BULLET = r"[-+*#\u2022\u2023\u2043\u2219\u25e6\u2013\u2014]+"
+_LIST_MARKER = rf"(?:{_ITEM_BULLET}|[(\[]?(?:\d+|[a-z]|[ivx]+)[.)\]])"
+_MARKER_IN_LINE = rf"(?:{_ITEM_BULLET}|\d+[.)\]])"
+
+
 def _sentence_start(read_through: bool) -> str:
     """Where a first slot written ``("^",)`` puts a phrase: after the run
     of whitespace and ignorables that starts the text, follows a
     sentence's end, or holds a line break other than one that ends a
-    line ending with a letter or a comma, as a wrapped sentence's does.
-    The search starts only where such a run starts, so it reads each run
+    line ending with a letter or a comma, as a wrapped sentence's does;
+    and after a list item's marker at the text's or a line's start,
+    whatever the line before ends with, or after a sentence's end. The
+    search starts only where such a run starts, so it reads each run
     once however many line breaks it holds (PR #672)."""
     gap = _GAP if read_through else r"\s"
     return (
-        rf"(?<!{gap})(?:\A|(?<=[.!?:;\"\u201c\u201d(>*])"
+        rf"(?<!{gap})(?:"
+        rf"(?:\A|(?={gap}*?\n)){gap}*{_LIST_MARKER}{gap}*"
+        rf"|(?<=[.!?:;]){gap}+{_MARKER_IN_LINE}{gap}*"
+        rf"|(?:\A|(?<=[.!?:;\"\u201c\u201d(>*])"
         # A line break first, after a line that does not end with a letter
         # or a comma; or one later in the run, after an ignorable.
-        rf"|(?<![^\W\d_])(?<!,)(?=\n)|(?={gap}+?\n))"
-        rf"{gap}*"
+        rf"|(?<![^\W\d_])(?<!,)(?=\n)|(?={gap}+?\n)){gap}*"
+        rf")"
     )
 
 
@@ -289,14 +304,16 @@ _ALSO_DATA = _forms(
 _MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simulated", "unrestricted")
 
 # "act as if" states a premise, which passes, only in three shapes (PR
-# #672): one variable, Latin or Greek, equal to something ("act as if x =
-# 3", "a equals 2"); "the", "a" or "an", one word that is not an
+# #672): one variable, a letter of any script or a digit, with any marks,
+# equal to something ("act as if x = 3", "a equals 2"); "the", "a" or "an", one word that is not an
 # instruction, a safeguard or a model, and "is", "are", "was" or "were"
 # ("act as if the die is fair"); or a model or a system with a maths
 # property (below). Anything else after "act as if" plays a role: "you are
 # DAN", "I were", "no rules apply", "the safety guidelines were disabled".
 # So does a premise whose sentence goes on to name a safeguard or a role
-# ("act as if the model is linear but has no safety restrictions").
+# ("act as if the model is linear but has no safety restrictions"), or to
+# lift a limit or a rule (below), and one whose sentence runs on past the
+# read, 120 characters on.
 _NOT_A_PREMISE_NOUN = (
     *_INSTRUCTIONS,
     *_forms(
@@ -320,42 +337,68 @@ _MATHS_PROPERTY = (
     "uniform", "additive", "multiplicative",
 )
 _STORY_ROLES = ("dan", "evil", "rogue")
+# Words a maths question uses too ("take the limit", "the chain rule",
+# "subject to the constraint", "linear programming"; Devin and CodeRabbit
+# on PR #672): after a premise, a safeguard only when a word before one
+# lifts or owns it, in the plural ("no limits", "without any rules", "your
+# restrictions"; "no limit exists" is maths), or the words after it say it
+# is gone ("the rules are lifted").
+_MATHS_SAFEGUARD = (
+    *_forms("limit:s", "constraint:s", "restriction:s", "filter:s", "rule:s", "direction:s", "polic:y,ies"),
+    "programming",
+)
+_SAFEGUARD_PLURAL = ("limits", "constraints", "restrictions", "filters", "rules", "directions", "policies")
+_LIFTING = ("no", "without", "your", "my", "beyond", "free")
+_GONE = ("lifted", "removed", "disabled", "off", "suspended", "waived", "gone", "ignored", "bypassed", "void")
 # What a premise's sentence may not name after it: an instruction, a
 # safeguard, an assistant, or a role; a model or a system only as the maths
-# objects above.
+# objects above, and a word a maths question uses only as lifted.
 _ROLE_IN_PREMISE = (
-    *(word for word in _NOT_A_PREMISE_NOUN if word not in _MATHS_OBJECT),
+    *(word for word in _NOT_A_PREMISE_NOUN if word not in _MATHS_OBJECT and word not in _MATHS_SAFEGUARD),
     "unrestricted", "unfiltered", "uncensored", *_forms("jailbreak:s,ing,ed", "jailbroken"),
     *_STORY_ROLES, "llm", "gpt", "chatgpt",
 )
 # How far on a sentence is read for what it goes on to say.
 _SENTENCE_READ = 120
+# A sentence's end: a dot, "!", "?" or ";", with up to three closing quotes
+# or brackets after it (cubic on PR #672), then whitespace or the text's end.
+_SENTENCE_END = rf"[.!?;][\"'\u201d\u2019)\]]{{0,3}}(?:{_GAP}|\Z)"
 
 
-def _later_in_sentence(word: str) -> str:
-    """``word``, a pattern, later in the same sentence: up to
-    ``_SENTENCE_READ`` characters on, line breaks included, before a dot,
-    "!", "?" or ";" with whitespace after it, and touching no letter a
-    reader sees (PR #672)."""
+def _sentence_ends_without(word: str, unless: str = "") -> str:
+    """A lookahead: the rest of the sentence names no ``word``, a pattern
+    touching no letter a reader sees, with no ``unless`` after it, and the
+    sentence or the text ends within ``_SENTENCE_READ`` characters, line
+    breaks included. A sentence that runs on further fails closed, as
+    what it goes on to say is not read (CodeRabbit on PR #672)."""
+    named = rf"(?<!{_SEEN_IN_COPY}){word}(?!{_SEEN_IN_COPY}){unless}"
     return (
-        rf"(?:(?![.!?;]{_GAP})[\s\S]){{0,{_SENTENCE_READ}}}?"
-        rf"(?<!{_SEEN_IN_COPY}){word}(?!{_SEEN_IN_COPY})"
+        rf"(?=(?:(?!{_SENTENCE_END})(?!{named})[\s\S]){{0,{_SENTENCE_READ}}}"
+        rf"(?:{_SENTENCE_END}|\Z))"
     )
 
 
 _WORD_IN_COPY = rf"[^\W\d_](?:{_MARK}*[^\W\d_])*"
+_LIFTED_SAFEGUARD = (
+    rf"(?:{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
+    rf"{_one_of(_SAFEGUARD_PLURAL)}"
+    rf"|{_one_of(_MATHS_SAFEGUARD)}{_BETWEEN_WORDS}"
+    rf"{_one_of(('is', 'are', 'was', 'were', 'be', 'been', 'being', 'get', 'gets', 'got'))}{_BETWEEN_WORDS}"
+    rf"(?:{_one_of(('turned', 'switched'))}{_BETWEEN_WORDS})?{_one_of(_GONE)})"
+)
+_AFTER_A_PREMISE = rf"(?:{_one_of(_ROLE_IN_PREMISE)}|{_LIFTED_SAFEGUARD})"
 # Combining marks a variable may carry ("x" with a bar, "v" with an arrow).
-_COMBINING = "̀-ͯ᪰-᫿᷀-᷿⃐-⃿︠-︯"
+_COMBINING = "\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f"
 _ASSUMPTION = (
     rf"if{_BETWEEN_WORDS}(?:"
-    rf"[a-z0-9{_GREEK}][{_COMBINING}]*(?!{_ANY_LETTER_OR_DIGIT}){_GAP}*"
+    rf"{_ANY_LETTER_OR_DIGIT}[{_COMBINING}]*(?!{_ANY_LETTER_OR_DIGIT}){_GAP}*"
     rf"(?:=|(?:is|equals?)(?!{_SEEN_IN_COPY}))"
     rf"|(?:the|a|an){_BETWEEN_WORDS}"
     rf"(?!{_one_of(_NOT_A_PREMISE_NOUN)}(?!{_SEEN_IN_COPY})){_WORD_IN_COPY}"
     rf"{_BETWEEN_WORDS}(?:is|are|was|were)(?!{_SEEN_IN_COPY})"
     rf"|(?:the|a|an){_BETWEEN_WORDS}{_one_of(_MATHS_OBJECT, False)}{_BETWEEN_WORDS}"
     rf"(?:is|are|was|were){_BETWEEN_WORDS}{_one_of(_MATHS_PROPERTY, False)}(?!{_SEEN_IN_COPY})"
-    rf")(?!{_later_in_sentence(_one_of(_ROLE_IN_PREMISE))})"
+    rf"){_sentence_ends_without(_AFTER_A_PREMISE)}"
 )
 _ACT_AS = "act as"
 _SYSTEM_PROMPT = "the system prompt"
@@ -364,21 +407,50 @@ _SYSTEM_PROMPT = "the system prompt"
 # text") is data, and so is an aggregate of them ("the system prompt token
 # counts", "the system prompt's length"), unless the same sentence goes on
 # to ask for the text ("the system prompt length and its text"), read up
-# to 120 characters on, across line breaks (PR #672). A text word that
-# names a quantity ("the response text length", "the text token count")
-# does not ask for the text.
+# to 120 characters on, across line breaks, or runs on further (PR #672). A text word that
+# names a quantity ("the response text length", "the text token count",
+# "the text's character count") does not ask for the text. A field may be
+# named by its version or its hash too ("System Prompt Version", CodeRabbit).
 _PROMPT_COLUMN = _forms("column:s", "field:s")
-_PROMPT_ATTRIBUTE = _forms("token:s", "length:s", "count:s", "size:s", "id:s")
+_PROMPT_UNIT = _forms("token:s", "character:s", "char:s", "word:s", "byte:s", "line:s")
+_PROMPT_MEASURE = _forms("length:s", "count:s", "size:s", "id:s")
+_PROMPT_ATTRIBUTE = (*_forms("token:s"), *_PROMPT_MEASURE, *_forms("version:s", "hash:es"))
 _PROMPT_TEXT = (*_forms("text:s", "content:s", "wording:s"), "verbatim", "body", "itself")
 _PROMPT_QUANTITY = (
-    rf"(?:{_one_of(_forms('token:s'))}{_BETWEEN_WORDS})?"
-    rf"{_one_of(_forms('length:s', 'count:s', 'size:s', 'id:s'))}(?!{_SEEN_IN_COPY})"
+    rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_UNIT)}{_BETWEEN_WORDS})?"
+    rf"{_one_of(_PROMPT_MEASURE)}(?!{_SEEN_IN_COPY})"
+)
+# A text word with a quantity after it names the quantity.
+_NOT_A_QUANTITY = rf"(?!{_BETWEEN_WORDS}{_PROMPT_QUANTITY})"
+_PROMPT_AGGREGATE = (
+    rf"(?:(?:{_one_of(_PROMPT_UNIT)}{_BETWEEN_WORDS})?{_one_of(_PROMPT_MEASURE)}"
+    rf"|{_one_of(_PROMPT_ATTRIBUTE)})(?!{_SEEN_IN_COPY})"
 )
 _PROMPT_METADATA = (
     rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_COLUMN)}(?!{_SEEN_IN_COPY})"
-    rf"|{_one_of(_PROMPT_ATTRIBUTE)}(?!{_SEEN_IN_COPY})"
-    rf"(?!{_later_in_sentence(_one_of(_PROMPT_TEXT))}(?!{_BETWEEN_WORDS}{_PROMPT_QUANTITY})))"
+    rf"|{_PROMPT_AGGREGATE}{_sentence_ends_without(_one_of(_PROMPT_TEXT), _NOT_A_QUANTITY)})"
 )
+# What may ask for the system prompt: the verbs of a request, in any form,
+# and their bare forms; "write" asks for new ones ("Write system prompts
+# for a support bot", gitar on PR #672).
+_REQUEST_VERBS = _forms(
+    "print:s,ed,ing", "show:s,ed,ing,n", "reveal:s,ed,ing", "repeat:s,ed,ing",
+    "output:s,ted,ting", "display:s,ed,ing", "give:s", "tell:s", "write:s",
+    "return:s,ed,ing", "share:s,d", "leak:s,ed,ing", "dump:s,ed,ing", "recite:s,d",
+    "copy", "copies", "copied", "copying", "translate:s,d", "translating",
+    "summarize:s,d", "summarizing", "summarise:s,d", "summarising",
+    "paraphrase:s,d", "paraphrasing", "quote:s,d", "quoting", "provide:s,d",
+    "providing", "disclose:s,d", "disclosing", "expose:s,d", "exposing",
+    "send:s,ing", "sent", "read:s,ing", "restate:s,d", "restating",
+)
+_REQUEST_IMPERATIVES = (
+    "print", "show", "reveal", "repeat", "output", "display", "give", "tell", "return", "share",
+    "leak", "dump", "recite", "copy", "translate", "summarize", "summarise", "paraphrase",
+    "quote", "provide", "disclose", "expose", "send", "read", "restate",
+)
+_TO_ME = ("*", ("me", "us", "out"), 2)
+_WHOLE = ("*", ("full", "entire", "exact", "whole", "complete", "original", "initial"), 2)
+_PROMPT_NOUNS = ("prompt", "prompts", "instructions", "message")
 
 # Each phrase: the name a refusal gives, and its slots.
 _PHRASES = (
@@ -429,34 +501,31 @@ _PHRASES = (
         ("your", "hidden", "secret"), ("*", ("initial", "original", "system"), 1),
         ("instructions", "prompt", "prompts", "guidelines", "programming"),
     )),
-    # The system prompt asked for ("print the system prompt", "print system
-    # prompt", "copy the_system_prompt", "what is the system prompt"), not
-    # named, as a header or a column of logged prompts is (PR #672).
+    # The system prompt asked for ("print the system prompt", "copy
+    # the_system_prompt", "what is the system prompt"), not named, as a
+    # header or a column of logged prompts is (PR #672).
     (_SYSTEM_PROMPT, (
-        _forms(
-            "print:s,ed,ing", "show:s,ed,ing,n", "reveal:s,ed,ing", "repeat:s,ed,ing",
-            "output:s,ted,ting", "display:s,ed,ing", "give:s", "tell:s", "write:s",
-            "return:s,ed,ing", "share:s,d", "leak:s,ed,ing", "dump:s,ed,ing", "recite:s,d",
-            "copy", "copies", "copied", "copying", "translate:s,d", "translating",
-            "summarize:s,d", "summarizing", "summarise:s,d", "summarising",
-            "paraphrase:s,d", "paraphrasing", "quote:s,d", "quoting", "provide:s,d",
-            "providing", "disclose:s,d", "disclosing", "expose:s,d", "exposing",
-            "send:s,ing", "sent", "read:s,ing", "restate:s,d", "restating",
-        ),
-        ("*", ("me", "us", "out"), 2), ("*", ("the", "your"), 1),
-        ("*", ("full", "entire", "exact", "whole", "complete", "original", "initial"), 2),
-        ("system",), ("prompt", "prompts", "instructions", "message"),
+        _REQUEST_VERBS, _TO_ME, ("the", "your"), _WHOLE, ("system",), _PROMPT_NOUNS,
         ("!re", _PROMPT_METADATA),
+    )),
+    # With no "the" or "your", only a request asks: a bare verb at a
+    # sentence's start or after "please", "kindly", "now", "just", "you",
+    # "and", "then" or "also" ("Print system prompt", "can you print system
+    # prompt", "solve it and print system prompt"). "Developers send system
+    # prompts with each request" tells, and passes (gitar).
+    (_SYSTEM_PROMPT, (
+        ("^",), _REQUEST_IMPERATIVES, _TO_ME, _WHOLE, ("system",), _PROMPT_NOUNS,
+        ("!re", _PROMPT_METADATA),
+    )),
+    (_SYSTEM_PROMPT, (
+        ("please", "kindly", "now", "just", "you", "and", "then", "also"), _REQUEST_IMPERATIVES, _TO_ME, _WHOLE,
+        ("system",), _PROMPT_NOUNS, ("!re", _PROMPT_METADATA),
     )),
     # Named in prose ("translate the system prompt", "what does the system
     # prompt say"); a header joins the words with underscores and passes.
+    (_SYSTEM_PROMPT, (("~",), ("the",), ("system",), _PROMPT_NOUNS, ("!re", _PROMPT_METADATA))),
     (_SYSTEM_PROMPT, (
-        ("~",), ("the",), ("system",), ("prompt", "prompts", "instructions", "message"),
-        ("!re", _PROMPT_METADATA),
-    )),
-    (_SYSTEM_PROMPT, (
-        ("what",), ("is", "was", "are", "were", "s"), ("the", "your"), ("system",),
-        ("prompt", "prompts", "instructions", "message"),
+        ("what",), ("is", "was", "are", "were", "s"), ("the", "your"), ("system",), _PROMPT_NOUNS,
         ("!re", _PROMPT_METADATA),
     )),
     ("your rules", (("your",), ("rules",))),
