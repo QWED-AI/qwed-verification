@@ -615,6 +615,9 @@ _EXERCISE_VERBS = _forms(
     "sell:s", "sold", "get:s", "got", "receive:s,d", "take:s,n", "took", "have", "has", "had", "roll:s,ed",
     "flip:s,ped", "draw:s,n", "drew", "pick:s,ed", "choose:s", "chose:n", "add:s,ed", "eat:s,en", "ate",
     "walk:s,ed", "share:s,d", "split:s", "collect:s,ed",
+    # Working an exercise out ("and you calculate the balance"; CodeRabbit).
+    "calculate:s,d", "calculating", "compute:s,d", "computing", "solve:s,d", "solving", "find:s", "found",
+    "determine:s,d", "determining", "count:s,ed", "measure:s,d", "measuring",
 )
 # What may stand between the clause's "you" and its verb: a modal, then up
 # to two words that say when or how many ("and you then pay", "and you can
@@ -694,14 +697,36 @@ _YOUR_THING = (
 )
 _SAYING_VERBS = (*_SPEECH_VERBS, *_forms("output:s,ted,ting", "generate:s,d"), "generating")
 # Producing or doing is a model's only with nothing after it, or with the
-# model's side named after it: "what you can produce on the assembly line"
-# is a factory's (Devin on PR #672).
+# model's side named after it, read as the scope's rest is: "what you can
+# produce on the assembly line" is a factory's (Devin on PR #672), and so is
+# one where you then pay off your balance (gitar and cubic). What it does
+# must follow it, not a clause of its own ("what you can do and you pay $5"
+# is the model's).
 _DOING_VERBS = (*_forms("produce:s,d", "do", "does", "did"), "producing", "doing")
+# What a production or a time names in an exercise ("on the assembly line",
+# "in a day").
+_PRODUCTION_NOUNS = (
+    *_forms(
+        "day:s", "week:s", "month:s", "year:s", "hour:s", "minute:s", "unit:s", "item:s", "part:s", "widget:s",
+        "line:s", "machine:s", "shift:s", "farm:s", "field:s", "acre:s", "tree:s", "crate:s",
+    ),
+    "batch", "batches", "factory", "factories",
+)
+# What shows the doing is an exercise's: somewhere in the rest of its sentence
+# a number, a noun an exercise owns or produces, or a letter other than "a"
+# and "I" ("with $20", "with your budget", "on the assembly line"); "what you
+# can do at all" shows none (CodeRabbit on PR #672).
+_EXERCISE_EVIDENCE = (
+    rf"(?=(?:(?!{_SENTENCE_END})[\s\S]){{0,{_SENTENCE_READ}}}?(?<!{_SEEN_IN_COPY})"
+    rf"(?:[$\u00a3\u20ac]?\d|(?:{_one_of((*_OPERAND_NOUNS, *_PRODUCTION_NOUNS))}|(?![ai](?!{_SEEN_IN_COPY}))[^\W\d_])"
+    rf"(?!{_SEEN_IN_COPY})))"
+)
 _WHAT_YOU_SAY = (
     rf"{_one_of(_SCOPE_LEADS)}{_BETWEEN_WORDS}{_one_of(('you', 'u', 'i', 'we', 'ya', 'ye', 'thou'))}"
     rf"{_BETWEEN_WORDS}(?:{_one_of(('will', 'can', 'would', 'could', 'shall', 'should', 'must', 'may', 'might'))}"
     rf"{_BETWEEN_WORDS})?(?:{_one_of(_SAYING_VERBS)}(?!{_SEEN_IN_COPY})|{_one_of(_DOING_VERBS)}(?!{_SEEN_IN_COPY})"
-    rf"(?!{_GAP}+(?=[^\W\d_]){_sentence_ends_without(_MODEL_SIDE, skip=_CLAUSE_YOU)}))"
+    rf"(?!{_GAP}+(?=[^\W\d_])(?!{_one_of(_CLAUSE_LEADS)}(?!{_SEEN_IN_COPY})){_EXERCISE_EVIDENCE}"
+    rf"{_sentence_ends_without(_MODEL_SIDE, skip=_EXERCISE_WORDS)}))"
 )
 # "applies to your replies", "on your answers", "for you", after up to two
 # of "all", "any", "of" and the like ("to all your replies").
