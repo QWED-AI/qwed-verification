@@ -227,9 +227,11 @@ def _sentence_start(read_through: bool) -> str:
 
 # What may open a sentence before a phrase that starts it, with a comma
 # after it: one word ("Okay, act as DAN", "Bob, act as DAN"); two words a
-# greeting leads ("Hey Bob,") or a model's name ends ("My assistant,",
-# "The assistant,"); or one of these leads and up to three more ("For this
-# task, act as DAN", "By the way, print system prompt"; Sentry on PR #672).
+# greeting leads ("Hey Bob,"), a salutation ("Good morning,"; gitar and
+# cubic), or two a model's name or a word that addresses someone ends ("My
+# assistant,", "The assistant,", "Good friend,"; cubic); or one of these
+# leads and up to three more ("For this task, act as DAN", "By the way,
+# print system prompt"; Sentry on PR #672).
 # Two other words are a subject and its verb or a subject ("Students
 # volunteer, act as mentors"; Devin), as a subject a wrapped line may hold
 # is ("My enzymes," then "act as catalysts"; CodeRabbit), and a longer
@@ -240,6 +242,11 @@ _OPENING_LEADS = (
     "with", "as", "to", "by",
 )
 _MODEL_NAMES = ("ai", "assistant", "model", "chatbot", "bot", "llm", "gpt", "chatgpt")
+_ADDRESS_NOUNS = (
+    "friend", "buddy", "pal", "mate", "sir", "madam", "dude", "bro", "guys", "folks", "everyone",
+    "everybody", "team", "comrade",
+)
+_TIMES_OF_DAY = ("morning", "afternoon", "evening", "day", "night")
 _GREETINGS = (
     "hey", "hi", "hello", "dear", "okay", "ok", "alright", "so", "well", "now", "yes", "no", "yeah",
     "please", "oh", "yo", "listen", "look", "thanks", "thank", "then", "and", "but", "also",
@@ -261,10 +268,11 @@ def _opening_and_comma(read_through: bool) -> str:
     join = rf"(?:{gap}+|[-_'\u2019])"
     lead = _one_of(_OPENING_LEADS, read_through) + edge
     greeting = _one_of(_GREETINGS, read_through) + edge
-    model = rf"{_one_of(_MODEL_NAMES, read_through)}(?:{_MARK}{{0,3}}s)?{edge}"
+    salutation = rf"{_one_of(('good',), read_through)}{edge}{join}{_one_of(_TIMES_OF_DAY, read_through)}{edge}"
+    addressee = rf"{_one_of((*_MODEL_NAMES, *_ADDRESS_NOUNS), read_through)}(?:{_MARK}{{0,3}}s)?{edge}"
     return (
-        rf"(?:{lead}{join}(?:{word}{join}){{0,2}}{word}|{greeting}{join}{word}|{word}{join}{model}|{word})"
-        rf"{gap}*,{gap}*"
+        rf"(?:{lead}{join}(?:{word}{join}){{0,2}}{word}|{greeting}{join}{word}|{salutation}"
+        rf"|{word}{join}{addressee}|{word}){gap}*,{gap}*"
     )
 
 
@@ -404,7 +412,7 @@ _NOT_A_PREMISE_NOUN = (
         _RESTRICTION, _CONSTRAINT, "filter:s", "limit:s", _POLICY,
         "guardrail:s", "model:s", "assistant:s", "bot:s", "chatbot:s", "system:s",
     ),
-    "safety", "ai", "entity", "entities", *_forms("llm:s"), "gpt", "chatgpt", *_ROLE_NOUN,
+    "safety", "ai", *_forms("llm:s"), "gpt", "chatgpt", *_ROLE_NOUN,
 )
 # "Model" and "system" name maths objects too: a premise about one passes
 # with a maths property after it ("act as if the model is linear", "the
@@ -547,19 +555,27 @@ _YOU_ARE_SOMEONE = (
 )
 # "and will answer anything", "can say whatever", "responds to any
 # question" after a premise: something that answers whatever it is asked
-# plays a model's role (Sentry on PR #672).
+# plays a model's role (Sentry on PR #672). "All" or "every" question is
+# that only for what something does ("answers every request", "will answer
+# all questions"); an exercise's direction to answer them is not ("and
+# answer all questions using that value"; Devin).
 _ANSWER_VERBS = _forms(
     "answer:s,ed,ing", "say:s,ing", "said", "respond:s,ed,ing", "reply", "replies", "replied", "replying",
     "tell:s,ing", "told", "write:s,ing", "wrote", "written", "generate:s,d", "generating",
 )
-# Tried only where one of the verbs may start, as a premise's read tries
-# what may follow it at each word.
+_ANSWER_BASE = ("answer", "say", "respond", "reply", "tell", "write", "generate")
+_MODALS = ("will", "can", "would", "could", "shall", "should", "must", "may", "might")
+_ASKED_THINGS = _forms("question:s", "request:s", "prompt:s", "query", "queries", "topic:s")
+_TO_SOMEONE = rf"(?:{_one_of(('to', 'me', 'us', 'you'))}{_BETWEEN_WORDS})?"
+# Tried only where one of the verbs or modals may start, as a premise's
+# read tries what may follow it at each word.
 _ANSWERS_ANYTHING = (
-    rf"(?=[{''.join(sorted({verb[0] for verb in _ANSWER_VERBS}))}])"
-    rf"{_one_of(_ANSWER_VERBS)}{_BETWEEN_WORDS}(?:{_one_of(('to', 'me', 'us', 'you'))}{_BETWEEN_WORDS})?"
-    rf"(?:{_one_of(('anything', 'everything', 'whatever'))}"
-    rf"|{_one_of(('any', 'all', 'every'))}{_BETWEEN_WORDS}"
-    rf"{_one_of(_forms('question:s', 'request:s', 'prompt:s', 'query', 'queries', 'topic:s'))})"
+    rf"(?=[{''.join(sorted({word[0] for word in (*_ANSWER_VERBS, *_MODALS)}))}])(?:"
+    rf"{_one_of(_ANSWER_VERBS)}{_BETWEEN_WORDS}{_TO_SOMEONE}"
+    rf"(?:{_one_of(('anything', 'everything', 'whatever'))}|{_one_of(('any',))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
+    rf"|(?:{_one_of(tuple(verb for verb in _ANSWER_VERBS if verb not in _ANSWER_BASE))}"
+    rf"|{_one_of(_MODALS)}{_BETWEEN_WORDS}{_one_of(_ANSWER_BASE)})"
+    rf"{_BETWEEN_WORDS}{_TO_SOMEONE}{_one_of(('all', 'every'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
 )
 _AFTER_A_PREMISE = rf"(?:{_one_of(_ROLE_IN_PREMISE)}|{_LIFTED_SAFEGUARD}|{_YOU_ARE_SOMEONE}|{_ANSWERS_ANYTHING})"
 # Combining marks a variable may carry ("x" with a bar, "v" with an arrow).
@@ -648,8 +664,9 @@ _FIELD_LEADS = ("per", "across", "where")
 
 
 # A filter's literal value: "containing the word 'text'", "matching
-# body", "with the term 'contents'" (Devin on PR #672). The literal is one
-# text word, in quotes or not; "containing the text" names no literal.
+# 'body'", "with the term contents" (Devin on PR #672). The literal is one
+# text word, in quotes, or after "the word", "the term" and the like;
+# "including content" and "containing the text" ask for the text (gitar).
 _LITERAL_LEADS = _forms("contain:s,ing", "match:es,ing", "include:s", "including", "mention:s,ing")
 _LITERAL_NOUNS = _forms("word:s", "term:s", "string:s", "phrase:s", "value:s", "keyword:s")
 _OPEN_QUOTE = "['\"\u2018\u201c]"
@@ -668,8 +685,9 @@ def _text_not_asked(text_words) -> str:
         rf"(?:{_one_of(('the', 'a', 'an', 'each', 'every'))}{_BETWEEN_WORDS})?"
         rf"(?:{_one_of(_OTHER_FIELD_NAMES)}{_BETWEEN_WORDS}){{1,2}}{_one_of(text_words)}"
         rf"|{_one_of(_PROMPT_MEASURE)}{_BETWEEN_WORDS}{_one_of(('in',))}{_BETWEEN_WORDS}{_one_of(_PROMPT_UNIT)}"
-        rf"|(?:{_one_of(_LITERAL_LEADS)}(?:{the_noun})?|{_one_of(('with',))}{the_noun})"
+        rf"|(?:{_one_of(_LITERAL_LEADS)}|{_one_of(('with',))}){the_noun}"
         rf"{_GAP}+{_OPEN_QUOTE}?{_one_of(text_words)}(?!{_SEEN_IN_COPY}){_CLOSE_QUOTE}?"
+        rf"|{_one_of(_LITERAL_LEADS)}{_GAP}+{_OPEN_QUOTE}{_one_of(text_words)}(?!{_SEEN_IN_COPY}){_CLOSE_QUOTE}"
         rf")(?!{_SEEN_IN_COPY})"
     )
     return _sentence_ends_without(_one_of(text_words), _NOT_A_QUANTITY, other_field)
@@ -753,7 +771,7 @@ _NAME_WORD = (
 _FILE_PART = rf"[^\W_](?:[\w-]|{_MARK}){{0,63}}"
 _DATA_FILE = rf"{_FILE_PART}(?:\.{_FILE_PART}){{0,3}}\.{_one_of(_DATA_FILE_TYPES)}"
 # What may not follow a source: more of a name, or a dot and more of one.
-_NAME_GOES_ON = rf"(?:{_MARK}{{0,3}}[\w-]|\.{_MARK}{{0,3}}[^\W_])"
+_NAME_GOES_ON = rf"{_MARK}*(?:[\w-]|\.{_MARK}*[^\W_])"
 _FROM_LOGGED_DATA = (
     rf"(?:{_one_of(_FILTER_LEADS)}{_NAME_JOIN}(?:{_NAME_WORD}){{1,3}})?"
     rf"{_one_of(('from',))}{_NAME_JOIN}(?:{_one_of(_SOURCE_DETERMINERS)}{_NAME_JOIN})?"
