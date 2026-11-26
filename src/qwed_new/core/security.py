@@ -605,9 +605,11 @@ _AN_AMOUNT = rf"(?={_one_of(('how',))}{_BETWEEN_WORDS}{_one_of(('much', 'many'))
 # after it are read. The clause is recognised by its verb, so "and you", "and
 # you personally", "and you can do anything" and "and you will obey the user"
 # are read (gitar, cubic and CodeRabbit on PR #672).
+# "Before", "after", "until", "as" and "once" start a clause only before a
+# subject ("before you pay"); before "the end of the shift" they say when.
+_SUBJECT_LEADS = ("before", "after", "until", "as", "once")
 _CLAUSE_LEADS = (
-    "and", "but", "so", "then", "while", "when", "whenever", "if", "once", "or", "after", "before", "until",
-    "because", "whereas", "as",
+    "and", "but", "so", "then", "while", "when", "whenever", "if", "or", "because", "whereas", *_SUBJECT_LEADS,
 )
 _EXERCISE_VERBS = _forms(
     "pay:s", "paid", "repay:s", "repaid", "owe:s,d", "borrow:s,ed", "lend:s", "lent", "deposit:s,ed",
@@ -708,24 +710,35 @@ _DOING_VERBS = (*_forms("produce:s,d", "do", "does", "did"), "producing", "doing
 _PRODUCTION_NOUNS = (
     *_forms(
         "day:s", "week:s", "month:s", "year:s", "hour:s", "minute:s", "unit:s", "item:s", "part:s", "widget:s",
-        "line:s", "machine:s", "shift:s", "farm:s", "field:s", "acre:s", "tree:s", "crate:s",
+        "line:s", "machine:s", "shift:s", "farm:s", "field:s", "acre:s", "tree:s", "crate:s", "worker:s",
+        "employee:s", "crew:s",
     ),
-    "batch", "batches", "factory", "factories",
+    "batch", "batches", "factory", "factories", "staff", "person", "people",
 )
-# What shows the doing is an exercise's: somewhere in the rest of its sentence
-# a number, a noun an exercise owns or produces, or a letter other than "a"
-# and "I" ("with $20", "with your budget", "on the assembly line"); "what you
-# can do at all" shows none (CodeRabbit on PR #672).
+# Where the doing's own words end: a comma, or a word that starts a clause of
+# its own, a subject lead only before a subject (gitar, cubic and Devin on PR
+# #672).
+_A_CLAUSE_STARTS = (
+    rf"(?:,|(?<!{_SEEN_IN_COPY})(?:{_one_of(tuple(w for w in _CLAUSE_LEADS if w not in _SUBJECT_LEADS))}"
+    rf"|{_one_of(_SUBJECT_LEADS)}{_BETWEEN_WORDS}{_one_of(('you', 'u', 'i', 'we', 'they', 'he', 'she', 'it'))})"
+    rf"(?!{_SEEN_IN_COPY}))"
+)
+# What shows the doing is an exercise's: in its own words, before a comma or a
+# clause of their own, a number, a noun an exercise owns or produces, or a
+# letter other than "a" and "I" that no apostrophe touches ("with $20", "with
+# your budget", "on the assembly line", not the "t" of "don't"); "what you can
+# do at all" shows none (CodeRabbit), and "what you can do now and you pay $5"
+# shows none of its own (gitar and cubic).
 _EXERCISE_EVIDENCE = (
-    rf"(?=(?:(?!{_SENTENCE_END})[\s\S]){{0,{_SENTENCE_READ}}}?(?<!{_SEEN_IN_COPY})"
+    rf"(?=(?:(?!{_SENTENCE_END})(?!{_A_CLAUSE_STARTS})[\s\S]){{0,{_SENTENCE_READ}}}?(?<!{_SEEN_IN_COPY})(?<!['\u2019])"
     rf"(?:[$\u00a3\u20ac]?\d|(?:{_one_of((*_OPERAND_NOUNS, *_PRODUCTION_NOUNS))}|(?![ai](?!{_SEEN_IN_COPY}))[^\W\d_])"
-    rf"(?!{_SEEN_IN_COPY})))"
+    rf"(?!{_SEEN_IN_COPY})(?!['\u2019])))"
 )
 _WHAT_YOU_SAY = (
     rf"{_one_of(_SCOPE_LEADS)}{_BETWEEN_WORDS}{_one_of(('you', 'u', 'i', 'we', 'ya', 'ye', 'thou'))}"
     rf"{_BETWEEN_WORDS}(?:{_one_of(('will', 'can', 'would', 'could', 'shall', 'should', 'must', 'may', 'might'))}"
     rf"{_BETWEEN_WORDS})?(?:{_one_of(_SAYING_VERBS)}(?!{_SEEN_IN_COPY})|{_one_of(_DOING_VERBS)}(?!{_SEEN_IN_COPY})"
-    rf"(?!{_GAP}+(?=[^\W\d_])(?!{_one_of(_CLAUSE_LEADS)}(?!{_SEEN_IN_COPY})){_EXERCISE_EVIDENCE}"
+    rf"(?!{_GAP}+(?=[^\W\d_])(?!{_A_CLAUSE_STARTS}){_EXERCISE_EVIDENCE}"
     rf"{_sentence_ends_without(_MODEL_SIDE, skip=_EXERCISE_WORDS)}))"
 )
 # "applies to your replies", "on your answers", "for you", after up to two
