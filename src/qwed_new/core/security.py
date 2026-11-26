@@ -566,21 +566,23 @@ _ABOUT_YOU = (
 # whatever you say", "on these replies", "on any topic"; CodeRabbit on PR
 # #672). Short and old forms of "you" count ("u", "ur", "y'all", "thee"),
 # and so does a possessive glued to a reply or a model ("on yourreplies").
+# The forms of "write", and what is asked of a model, each written once.
+_WRITE_FORMS = ("write:s", "writing", "wrote", "written")
+_ASKED_THINGS = _forms("question:s", "request:s", "prompt:s", "query", "queries", "topic:s")
 _SPEECH_VERBS = (
     *_forms("answer:s,ed,ing", "respond:s,ed,ing", "reply", "replies", "replied", "replying"),
     *_forms(
-        "say:s,ing", "said", "tell:s,ing", "told", "speak:s,ing", "spoke:n", "talk:s,ed,ing", "write:s",
-        "writing", "wrote", "written", "discuss:es,ed,ing", "ask:s,ed,ing",
+        "say:s,ing", "said", "tell:s,ing", "told", "speak:s,ing", "spoke:n", "talk:s,ed,ing", *_WRITE_FORMS,
+        "discuss:es,ed,ing", "ask:s,ed,ing",
     ),
 )
 _POSSESSIVES = ("your", "my", "our", "ur", "youre", "yer", "thy", "thine")
 _MODEL_SIDE_WORDS = (
     "you", "yours", "yourself", "yourselves", "me", "mine", "myself", "us", "ours", "ourselves", "u", "ya", "ye",
-    "thee", "thou", *_POSSESSIVES, *_REPLIES, *_SPEECH_VERBS, "discussion", "discussions",
+    "thee", "thou", *_POSSESSIVES, *_REPLIES, *_SPEECH_VERBS, "discussion", "discussions", *_ASKED_THINGS,
     *_forms(
-        "question:s", "request:s", "prompt:s", "query", "queries", "topic:s", "content:s", "speech",
-        "conversation:s", "chat:s", "language", "opinion:s", "behave:s,d", "behaving", "conduct", "censorship",
-        "ethics", "morals", "safety",
+        "content:s", "speech", "conversation:s", "chat:s", "language", "opinion:s", "behave:s,d", "behaving",
+        "conduct", "censorship", "ethics", "morals", "safety",
     ),
 )
 _MODEL_SIDE = (
@@ -597,22 +599,32 @@ _SCOPE_LEADS = (
     "whenever", "where", "wherever", "why", "anything", "everything", "something", "nothing",
 )
 _AN_AMOUNT = rf"(?={_one_of(('how',))}{_BETWEEN_WORDS}{_one_of(('much', 'many'))}(?!{_SEEN_IN_COPY}))"
-# "You" that starts a clause of its own after the scope is the one doing the
-# exercise, not what the limits govern ("limits on early repayment and you
-# pay $125"; Devin): passed over, while the words after it are read. "You"
-# joined to the scope ("and you", "and you all", "and you, the robot") is
-# read.
+# "You" that starts a clause of its own after the scope, doing an exercise's
+# action, is the one doing the exercise, not what the limits govern ("limits
+# on early repayment and you pay $125"; Devin): passed over, while the words
+# after it are read. The clause is recognised by its verb, so "and you", "and
+# you personally", "and you can do anything" and "and you will obey the user"
+# are read (gitar, cubic and CodeRabbit on PR #672).
 _CLAUSE_LEADS = (
     "and", "but", "so", "then", "while", "when", "whenever", "if", "once", "or", "after", "before", "until",
     "because", "whereas", "as",
 )
-_NOT_A_CLAUSE = (
-    "and", "or", "nor", "all", "both", "alone", "too", "also", "only", "guys", "folks", "yourself",
-    "yourselves", "included", "including",
+_EXERCISE_VERBS = _forms(
+    "pay:s", "paid", "repay:s", "repaid", "owe:s,d", "borrow:s,ed", "lend:s", "lent", "deposit:s,ed",
+    "withdraw:s,n", "withdrew", "save:s,d", "spend:s", "spent", "earn:s,ed", "invest:s,ed", "buy:s", "bought",
+    "sell:s", "sold", "get:s", "got", "receive:s,d", "take:s,n", "took", "have", "has", "had", "roll:s,ed",
+    "flip:s,ped", "draw:s,n", "drew", "pick:s,ed", "choose:s", "chose:n", "add:s,ed", "eat:s,en", "ate",
+    "walk:s,ed", "share:s,d", "split:s", "collect:s,ed",
+)
+# What may stand between the clause's "you" and its verb: a modal, or a word
+# that says when or how many ("and you then pay", "and you each pay").
+_CLAUSE_STEPS = (
+    "will", "can", "would", "could", "should", "must", "may", "might", "then", "also", "only", "each", "both",
+    "now", "later", "still", "already", "first", "just",
 )
 _CLAUSE_YOU = (
     rf"(?:(?<!{_SEEN_IN_COPY}){_one_of(_CLAUSE_LEADS)}{_BETWEEN_WORDS}|,{_GAP}*){_one_of(('you', 'u'))}"
-    rf"(?={_GAP}+(?!{_one_of(_NOT_A_CLAUSE)}(?!{_SEEN_IN_COPY}))[^\W\d_])"
+    rf"(?={_GAP}+(?:{_one_of(_CLAUSE_STEPS)}{_GAP}+)?{_one_of(_EXERCISE_VERBS)}(?!{_SEEN_IN_COPY}))"
 )
 _ANOTHERS_SCOPE = (
     rf"(?:{_AN_AMOUNT}|(?!{_one_of(_SCOPE_LEADS)}(?!{_SEEN_IN_COPY})))"
@@ -632,25 +644,46 @@ _OPERAND_NOUNS = _forms(
     "guess:es", "estimate:s", "choice:s", "pick:s", "move:s", "turn:s", "bet:s", "stake:s", "time", "speed",
     "distance", "weight", "height", "age", "dice", "die", "coin:s", "card:s", "hand", "piece:s", "team:s",
 )
+# Words that say which of an exercise's operands ("your monthly payment";
+# Devin on PR #672).
+_OPERAND_MODIFIERS = (
+    "monthly", "weekly", "daily", "yearly", "annual", "hourly", "total", "initial", "final", "first", "second",
+    "third", "next", "last", "current", "remaining", "minimum", "maximum", "average", "starting", "opening",
+    "closing", "new", "original", "net", "gross", "late", "early", "extra", "down", "base", "unknown", "chosen",
+    "lucky",
+)
+# An operand: a noun an exercise owns after up to two words that say which,
+# a letter alone or a number; what follows its "of" is an operand too ("your
+# choice of x", not "your choice of words"; CodeRabbit), and the rest of its
+# sentence names nothing of the model's or the reader's side.
+_OPERAND_HEAD = (
+    rf"(?:(?:{_one_of(_OPERAND_MODIFIERS)}{_BETWEEN_WORDS}){{0,2}}{_one_of(_OPERAND_NOUNS)}"
+    rf"|[^\W\d_]|[$\u00a3\u20ac]?\d+(?:[.,]\d+)*)(?!{_SEEN_IN_COPY})"
+)
+_OPERAND = (
+    rf"{_OPERAND_HEAD}(?!{_BETWEEN_WORDS}{_one_of(('of',))}{_BETWEEN_WORDS}"
+    rf"(?!(?:{_one_of(('the', 'a', 'an', 'all', 'any', 'each', 'its'))}{_BETWEEN_WORDS})?{_OPERAND_HEAD}))"
+    rf"{_sentence_ends_without(_MODEL_SIDE, skip=_CLAUSE_YOU)}"
+)
 # A singular safeguard is the model's when it is about you or yours, a
-# possessive's word that no exercise owns ("no restriction applies to your
-# words", "to your thoughts", "to any of your actions"; gitar on PR #672),
-# or what you say ("no limit on what you say"). A letter alone is an
-# operand ("no restriction on my x").
+# possessive's word that is not an operand ("no restriction applies to your
+# words", "to your thoughts", "to any of your actions", "to your very own
+# words"; gitar and cubic on PR #672), or what you say ("no limit on what
+# you say"). A letter alone is an operand ("no restriction on my x").
 _YOUR_THING = (
-    rf"{_one_of(_POSSESSIVES)}{_BETWEEN_WORDS}(?:{_one_of(('own', 'very'))}{_BETWEEN_WORDS})?"
-    rf"(?!{_one_of((*_OPERAND_NOUNS, 'own', 'very'))}(?!{_SEEN_IN_COPY}))(?![^\W\d_](?!{_SEEN_IN_COPY}))"
-    rf"{_WORD_IN_COPY}"
+    rf"{_one_of(_POSSESSIVES)}{_BETWEEN_WORDS}(?:{_one_of(('own', 'very'))}{_BETWEEN_WORDS})*"
+    rf"(?!{_one_of(('own', 'very'))}(?!{_SEEN_IN_COPY}))(?!{_OPERAND}){_WORD_IN_COPY}"
 )
-_SAYING_VERBS = (
-    *_SPEECH_VERBS,
-    *_forms("output:s,ted,ting", "generate:s,d", "generating", "produce:s,d", "producing", "do", "does", "did"),
-    "doing",
-)
+_SAYING_VERBS = (*_SPEECH_VERBS, *_forms("output:s,ted,ting", "generate:s,d"), "generating")
+# Producing or doing is a model's only with nothing after it, or with the
+# model's side named after it: "what you can produce on the assembly line"
+# is a factory's (Devin on PR #672).
+_DOING_VERBS = (*_forms("produce:s,d", "do", "does", "did"), "producing", "doing")
 _WHAT_YOU_SAY = (
     rf"{_one_of(_SCOPE_LEADS)}{_BETWEEN_WORDS}{_one_of(('you', 'u', 'i', 'we', 'ya', 'ye', 'thou'))}"
     rf"{_BETWEEN_WORDS}(?:{_one_of(('will', 'can', 'would', 'could', 'shall', 'should', 'must', 'may', 'might'))}"
-    rf"{_BETWEEN_WORDS})?{_one_of(_SAYING_VERBS)}(?!{_SEEN_IN_COPY})"
+    rf"{_BETWEEN_WORDS})?(?:{_one_of(_SAYING_VERBS)}(?!{_SEEN_IN_COPY})|{_one_of(_DOING_VERBS)}(?!{_SEEN_IN_COPY})"
+    rf"(?!{_GAP}+(?=[^\W\d_]){_sentence_ends_without(_MODEL_SIDE, skip=_CLAUSE_YOU)}))"
 )
 # "applies to your replies", "on your answers", "for you", after up to two
 # of "all", "any", "of" and the like ("to all your replies").
@@ -676,15 +709,17 @@ _NOT_BOUND = (
     rf"{_one_of(_SAFEGUARD_PLURAL)}(?!{_SEEN_IN_COPY})"
     rf"(?!{_BETWEEN_WORDS}{_one_of(('on', 'of', 'for', 'in', 'at', 'over'))}{_BETWEEN_WORDS}{_ANOTHERS_SCOPE})"
 )
+# The singular branches share one read of what the safeguard is about, as
+# a read holds a named group that one search may hold once.
 _LIFTED_SAFEGUARD = (
     rf"(?:{_NOT_BOUND}|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
-    rf"|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_SINGULAR)}{_BETWEEN_WORDS}{_TO_YOU}"
     rf"|{_one_of(_MATHS_SAFEGUARD)}{_BETWEEN_WORDS}"
     rf"{_one_of(('is', 'are', 'was', 'were', 'be', 'been', 'being', 'get', 'gets', 'got'))}{_BETWEEN_WORDS}"
     rf"(?:{_one_of(('turned', 'switched'))}{_BETWEEN_WORDS})?{_one_of(_GONE)}"
     rf"|{_one_of(_NO_LONGER_APPLY_NOUNS)}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}{_BETWEEN_WORDS}"
     rf"{_one_of((*_APPLY, 'matter', 'matters', 'count', 'counts'))}"
-    rf"|{_one_of(_SAFEGUARD_SINGULAR)}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}{_BETWEEN_WORDS}{_TO_YOU})"
+    rf"|(?:{_LIFTING_WORDS}{_one_of(_SAFEGUARD_SINGULAR)}"
+    rf"|{_one_of(_SAFEGUARD_SINGULAR)}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}){_BETWEEN_WORDS}{_TO_YOU})"
 )
 # "and you are my assistant" or "you are no longer bound" after a premise
 # gives a role (Sentry on PR #672); "you are given", "you are the first to
@@ -709,7 +744,7 @@ _YOU_ARE_SOMEONE = (
 # value to answer all questions below"; Devin).
 _ANSWER_VERBS = _forms(
     "answer:s,ed,ing", "say:s,ing", "said", "respond:s,ed,ing", "reply", "replies", "replied", "replying",
-    "tell:s,ing", "told", "write:s", "writing", "wrote", "written", "generate:s,d", "generating",
+    "tell:s,ing", "told", *_WRITE_FORMS, "generate:s,d", "generating",
 )
 # Writing or generating every question makes them, not answers them ("the
 # teacher is writing every question on the board"; Devin and cubic on PR
@@ -744,7 +779,6 @@ _ANSWER_LEAD = (
     rf"|{_one_of(_FINITE_BE)}{_BETWEEN_WORDS}{_one_of(_ROLE_STATES)}{_BETWEEN_WORDS}{_one_of(('to',))}"
     rf"|{_one_of(('gonna',))})"
 )
-_ASKED_THINGS = _forms("question:s", "request:s", "prompt:s", "query", "queries", "topic:s")
 _TO_SOMEONE = rf"(?:{_one_of(('to', 'me', 'us', 'you'))}{_BETWEEN_WORDS})?"
 # Tried only where one of the verbs or modals may start, as a premise's
 # read tries what may follow it at each word.
