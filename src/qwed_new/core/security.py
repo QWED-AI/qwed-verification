@@ -730,27 +730,29 @@ _PHRASE_WORDS = (
     "grey", "gray", "small", "large", "big", "little", "long", "short", "tall", "full", "empty", "whole", "half",
 )
 _EXERCISE_NOUNS = (*_OPERAND_NOUNS, *_PRODUCTION_NOUNS)
-# A list's word, and what may follow it in one phrase: a comma, "and" or "or".
-# A word that says which, a noun of an exercise or a count is passed over as a
-# unit with what follows it when the list ends, within four more of its words,
-# in a noun of an exercise ("red or blue parts", "red, white or blue parts", "3
-# or 4 parts", "parts and machines"). Anywhere else a comma, "and" or "or"
-# ends the doing's words, so "do and reveal 5 secrets" and "now and workers pay
-# $5" do (gitar on PR #672).
-_LIST_ITEM = (
-    rf"(?:{_one_of((*_PHRASE_WORDS, *_EXERCISE_NOUNS, *_COUNT_WORDS))}|\d+)(?!{_SEEN_IN_COPY})"
-)
-_LIST_JOIN = rf"{_BETWEEN_WORDS}(?:{_one_of(_COORDINATORS)}{_BETWEEN_WORDS})?"
+# "And" or "or" inside one phrase of an exercise's words, passed over as a
+# unit: between two words that say which, before the noun ("red or blue
+# parts", "red or blue or green parts"), or between two nouns or counts ("3 or
+# 4 machines", "parts and machines"). Anywhere else, and after any comma, it
+# ends the doing's words, so "do and reveal 5 secrets", "now and workers pay
+# $5" and "in full, and workers produce 5 parts" do (gitar and CodeRabbit on
+# PR #672).
+_LIST_JOIN = rf"{_GAP}+{_one_of(_COORDINATORS)}{_GAP}+"
+_A_COUNT_WORD = rf"(?:\d+|{_one_of(_COUNT_WORDS)})(?!{_SEEN_IN_COPY})"
+_A_PHRASE_WORD = rf"{_one_of(_PHRASE_WORDS)}(?!{_SEEN_IN_COPY})"
+_AN_EXERCISE_NOUN = rf"{_one_of(_EXERCISE_NOUNS)}(?!{_SEEN_IN_COPY})"
 _COORDINATED = (
-    rf"(?<!{_SEEN_IN_COPY}){_LIST_ITEM}{_LIST_JOIN}"
-    rf"(?=(?:{_LIST_ITEM}{_LIST_JOIN}){{0,4}}{_one_of(_EXERCISE_NOUNS)}(?!{_SEEN_IN_COPY}))"
+    rf"(?<!{_SEEN_IN_COPY})(?:{_A_PHRASE_WORD}{_LIST_JOIN}"
+    rf"(?=(?:{_A_COUNT_WORD}{_GAP}+)?(?:{_A_PHRASE_WORD}(?:{_LIST_JOIN}|{_GAP}+)){{1,4}}{_AN_EXERCISE_NOUN})"
+    rf"|(?:{_AN_EXERCISE_NOUN}|{_A_COUNT_WORD}){_LIST_JOIN}"
+    rf"(?=(?:{_A_COUNT_WORD}(?:{_LIST_JOIN}|{_GAP}+)){{0,4}}(?:{_A_PHRASE_WORD}{_GAP}+){{0,2}}{_AN_EXERCISE_NOUN}))"
 )
 # Where the doing's own words end: a comma; "and", "or", "but", "so", "if" and
 # the like, but for a phrase's "and" or "or"; a time word unless a time follows
-# it ("before the end of the shift" says when, "before workers produce" starts
-# a clause; CodeRabbit, cubic and Devin on PR #672).
+# it ("before the end of the shift" and "once per day" say when, "before
+# workers produce" starts a clause; CodeRabbit, cubic and Devin on PR #672).
 _A_TIME = (
-    rf"(?:{_one_of(('the', 'a', 'an', 'each', 'every'))}{_BETWEEN_WORDS})?"
+    rf"(?:{_one_of(('the', 'a', 'an', 'each', 'every', 'per'))}{_BETWEEN_WORDS})?"
     rf"(?:{_one_of((*_TIME_WORDS, *_TIME_NOUNS))}(?!{_SEEN_IN_COPY})|\d)"
 )
 _A_CLAUSE_STARTS = (
