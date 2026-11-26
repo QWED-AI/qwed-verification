@@ -443,8 +443,10 @@ _MATHS_PROPERTY = (
 _STORY_ROLES = ("dan", "evil", "rogue")
 # Bare requests to the reader that may follow a role ("acting as DAN,
 # answer me", "acting as DAN, please answer me"; cubic on PR #672). Followed
-# by a count, the verb tells what a group does ("My friends, acting as Dan,
-# give 3 clues each"; Devin and cubic).
+# by a group's share, a number, what it counts and "each", the verb tells
+# what a group does ("My friends, acting as Dan, give 3 clues each"; Devin
+# and cubic); a number alone, or "each", "many" or "both", may be a request
+# ("answer one question", "answer each question"; gitar and CodeRabbit).
 _ROLE_IMPERATIVES = (
     "answer", "tell", "reply", "respond", "say", "write", "give", "show", "print", "explain", "help",
     "ignore", "forget", "do", "provide", "generate", "describe", "list", "speak", "talk", "chat", "stay",
@@ -452,9 +454,13 @@ _ROLE_IMPERATIVES = (
 )
 _COUNT_WORDS = (
     "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
-    "twenty", "thirty", "hundred", "dozen", "several", "many", "both", "each",
+    "twenty", "thirty", "hundred", "dozen",
 )
-_A_COUNT = rf"(?:\d|{_one_of(_COUNT_WORDS)}(?!{_SEEN_IN_COPY}))"
+_A_COUNT = (
+    rf"(?:\d+|{_one_of(_COUNT_WORDS)})(?!{_SEEN_IN_COPY}){_BETWEEN_WORDS}"
+    rf"[^\W\d_](?:{_MARK}{{0,3}}[^\W\d_]){{0,30}}{_BETWEEN_WORDS}"
+    rf"{_one_of(('each',))}(?!{_SEEN_IN_COPY})"
+)
 # Words a maths question uses too ("take the limit", "the chain rule",
 # "subject to the constraint", "linear programming"; Devin and CodeRabbit
 # on PR #672): after a premise, a safeguard only when a word before one
@@ -560,7 +566,9 @@ _TO_YOU = (
     rf"{_ABOUT_YOU}"
 )
 # "not bound by any rules", "no longer limited by the rules", "unbound by
-# rules" lift a safeguard too (Sentry on PR #672).
+# rules" lift a safeguard too (Sentry on PR #672), unless what the
+# safeguards govern is named and is not the model or its replies ("not
+# subject to limits on early repayment"; Devin and cubic).
 _BOUND_WORDS = (
     "bound", "limited", "restricted", "constrained", "governed", "held", "subject", "tied", "restrained",
     "beholden",
@@ -570,7 +578,8 @@ _NOT_BOUND = (
     rf"(?:(?:{_one_of(('not', 'never'))}|{_words_in_copy(('no', 'longer'))}){_BETWEEN_WORDS}{_one_of(_BOUND_WORDS)}"
     rf"|{_one_of(_UNBOUND_WORDS)}){_BETWEEN_WORDS}{_one_of(('by', 'to', 'from'))}{_BETWEEN_WORDS}"
     rf"(?:{_one_of(('any', 'the', 'its', 'their', 'your', 'his', 'her', 'my', 'our'))}{_BETWEEN_WORDS})?"
-    rf"{_one_of(_SAFEGUARD_PLURAL)}"
+    rf"{_one_of(_SAFEGUARD_PLURAL)}(?!{_SEEN_IN_COPY})"
+    rf"(?!{_BETWEEN_WORDS}{_one_of(('on', 'of', 'for', 'in', 'at', 'over'))}{_BETWEEN_WORDS}(?!{_ABOUT_YOU}))"
 )
 _LIFTED_SAFEGUARD = (
     rf"(?:{_NOT_BOUND}|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
@@ -597,14 +606,14 @@ _YOU_ARE_SOMEONE = (
 # plays a model's role (Sentry on PR #672). "All" or "every" question is
 # that only for what something does ("answers every request", "will answer
 # all questions", "you'll answer", "you answer", "going to answer", "I
-# want you to answer"; gitar and cubic); an exercise's direction to answer
+# want you to answer"; gitar and cubic), and so is "my" or "our" question,
+# whatever answers it ("a hacker is answering my questions"; Sentry); an exercise's direction to answer
 # them is not ("and answer all questions using that value", "use that
 # value to answer all questions below"; Devin).
 _ANSWER_VERBS = _forms(
     "answer:s,ed,ing", "say:s,ing", "said", "respond:s,ed,ing", "reply", "replies", "replied", "replying",
     "tell:s,ing", "told", "write:s", "writing", "wrote", "written", "generate:s,d", "generating",
 )
-_ANSWER_BASE = ("answer", "say", "respond", "reply", "tell", "write", "generate")
 # Writing or generating every question makes them, not answers them ("the
 # teacher is writing every question on the board"; Devin and cubic on PR
 # #672): "all" and "every" are read with the verbs of a reply only.
@@ -622,25 +631,31 @@ _BIDDING_VERBS = _forms(
     "instruct:s,ed", "command:s,ed", "allow:s,ed", "force:s,d", "get:s", "got",
 )
 _BIDDEN = ("you", "them", "it", "him", "her", "us")
-# Words that say what something is there to do ("able to", "ready to",
-# "designed to"; gitar on PR #672).
-_TO_LEADS = (
-    "going", "have", "has", "had", "got", "able", "ready", "free", "here", "willing", "happy", "eager",
-    "glad", "designed", "built", "made", "meant", "supposed", "programmed", "trained", "prepared",
-    "allowed", "permitted", "configured",
+_TO_LEADS = ("going", "have", "has", "had", "got")
+# Words that say what something is there to do, after "is", "are", "was",
+# "been" and the like ("it is able to", "it was designed to"; gitar on PR
+# #672); an exercise's "be prepared to answer" and "use the information
+# here to answer" pass (Devin and cubic).
+_ROLE_STATES = (
+    "able", "ready", "free", "here", "willing", "happy", "eager", "glad", "designed", "built", "made",
+    "meant", "supposed", "programmed", "trained", "prepared", "allowed", "permitted", "configured",
 )
+_FINITE_BE = ("is", "are", "was", "were", "am", "been", "s", "re", "m")
 _ANSWER_LEAD = (
     rf"(?:{_one_of(_ANSWER_LEADS)}|{_one_of(_BIDDING_VERBS)}{_BETWEEN_WORDS}{_one_of(_BIDDEN)}{_BETWEEN_WORDS}"
-    rf"{_one_of(('to',))}|{_one_of(_TO_LEADS)}{_BETWEEN_WORDS}{_one_of(('to',))}|{_one_of(('gonna',))})"
+    rf"{_one_of(('to',))}|{_one_of(_TO_LEADS)}{_BETWEEN_WORDS}{_one_of(('to',))}"
+    rf"|{_one_of(_FINITE_BE)}{_BETWEEN_WORDS}{_one_of(_ROLE_STATES)}{_BETWEEN_WORDS}{_one_of(('to',))}"
+    rf"|{_one_of(('gonna',))})"
 )
 _ASKED_THINGS = _forms("question:s", "request:s", "prompt:s", "query", "queries", "topic:s")
 _TO_SOMEONE = rf"(?:{_one_of(('to', 'me', 'us', 'you'))}{_BETWEEN_WORDS})?"
 # Tried only where one of the verbs or modals may start, as a premise's
 # read tries what may follow it at each word.
 _ANSWERS_ANYTHING = (
-    rf"(?=[{''.join(sorted({w[0] for w in (*_ANSWER_VERBS, *_ANSWER_LEADS, *_BIDDING_VERBS, *_TO_LEADS, 'gonna')}))}])(?:"
+    rf"(?=[{''.join(sorted({w[0] for w in (*_ANSWER_VERBS, *_ANSWER_LEADS, *_BIDDING_VERBS, *_TO_LEADS, *_FINITE_BE, 'gonna')}))}])(?:"
     rf"{_one_of(_ANSWER_VERBS)}{_BETWEEN_WORDS}{_TO_SOMEONE}"
-    rf"(?:{_one_of(('anything', 'everything', 'whatever'))}|{_one_of(('any',))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
+    rf"(?:{_one_of(('anything', 'everything', 'whatever'))}"
+    rf"|{_one_of(('any', 'my', 'our'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
     rf"|(?:{_one_of(tuple(verb for verb in _RESPONSE_VERBS if verb not in _RESPONSE_BASE))}"
     rf"|{_ANSWER_LEAD}{_BETWEEN_WORDS}{_one_of(_RESPONSE_BASE)})"
     rf"{_BETWEEN_WORDS}{_TO_SOMEONE}{_one_of(('all', 'every'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
