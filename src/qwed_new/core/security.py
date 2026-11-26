@@ -732,20 +732,25 @@ _PHRASE_WORDS = (
 _EXERCISE_NOUNS = (*_OPERAND_NOUNS, *_PRODUCTION_NOUNS)
 # "And" or "or" inside one phrase of an exercise's words, passed over as a
 # unit: between two words that say which, before the noun ("red or blue
-# parts", "red or blue or green parts"), or between two nouns or counts ("3 or
-# 4 machines", "parts and machines"). Anywhere else, and after any comma, it
+# parts", "red or blue or green parts"), between two counts before the noun
+# ("3 or 4 machines", "half or one hour"), or between two nouns ("parts and
+# machines"). Anywhere else, and after any comma, it
 # ends the doing's words, so "do and reveal 5 secrets", "now and workers pay
 # $5" and "in full, and workers produce 5 parts" do (gitar and CodeRabbit on
 # PR #672).
 _LIST_JOIN = rf"{_GAP}+{_one_of(_COORDINATORS)}{_GAP}+"
-_A_COUNT_WORD = rf"(?:\d+|{_one_of(_COUNT_WORDS)})(?!{_SEEN_IN_COPY})"
-_A_PHRASE_WORD = rf"{_one_of(_PHRASE_WORDS)}(?!{_SEEN_IN_COPY})"
+# A count may be a half ("half or one hour"), and a word that says which may
+# join two with a hyphen ("blue-green"; Devin on PR #672).
+_A_COUNT_WORD = rf"(?:\d+|{_one_of((*_COUNT_WORDS, 'half'))})(?!{_SEEN_IN_COPY})"
+_A_PHRASE_WORD = rf"{_one_of(_PHRASE_WORDS)}(?:-{_one_of(_PHRASE_WORDS)})*(?!{_SEEN_IN_COPY})"
 _AN_EXERCISE_NOUN = rf"{_one_of(_EXERCISE_NOUNS)}(?!{_SEEN_IN_COPY})"
 _COORDINATED = (
     rf"(?<!{_SEEN_IN_COPY})(?:{_A_PHRASE_WORD}{_LIST_JOIN}"
     rf"(?=(?:{_A_COUNT_WORD}{_GAP}+)?(?:{_A_PHRASE_WORD}(?:{_LIST_JOIN}|{_GAP}+)){{1,4}}{_AN_EXERCISE_NOUN})"
-    rf"|(?:{_AN_EXERCISE_NOUN}|{_A_COUNT_WORD}){_LIST_JOIN}"
-    rf"(?=(?:{_A_COUNT_WORD}(?:{_LIST_JOIN}|{_GAP}+)){{0,4}}(?:{_A_PHRASE_WORD}{_GAP}+){{0,2}}{_AN_EXERCISE_NOUN}))"
+    rf"|{_AN_EXERCISE_NOUN}{_LIST_JOIN}"
+    rf"(?=(?:{_A_COUNT_WORD}(?:{_LIST_JOIN}|{_GAP}+)){{0,4}}(?:{_A_PHRASE_WORD}{_GAP}+){{0,2}}{_AN_EXERCISE_NOUN})"
+    rf"|{_A_COUNT_WORD}{_LIST_JOIN}"
+    rf"(?=(?:{_A_COUNT_WORD}(?:{_LIST_JOIN}|{_GAP}+)){{1,4}}(?:{_A_PHRASE_WORD}{_GAP}+){{0,2}}{_AN_EXERCISE_NOUN}))"
 )
 # Where the doing's own words end: a comma; "and", "or", "but", "so", "if" and
 # the like, but for a phrase's "and" or "or"; a time word unless a time follows
