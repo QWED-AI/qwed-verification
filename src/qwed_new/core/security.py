@@ -64,6 +64,11 @@ _LOOKALIKES = str.maketrans({
     "\u0410": "a", "\u0412": "b", "\u0415": "e", "\u041a": "k", "\u041c": "m", "\u041d": "h",
     "\u041e": "o", "\u0420": "p", "\u0421": "c", "\u0422": "t", "\u0425": "x", "\u0406": "i",
     "\u0408": "j", "\u0405": "s", "\u04ae": "y", "\u051a": "q", "\u051c": "w",
+    # More that read as Latin letters (Sentry on PR #672): es with a
+    # descender, omega, sje, the kas, palochka, Komi de and shha.
+    "\u04ab": "c", "\u04aa": "c", "\u0461": "w", "\u0460": "w", "\u050d": "g", "\u050c": "g",
+    "\u049f": "k", "\u049e": "k", "\u049d": "k", "\u049c": "k", "\u04a1": "k", "\u04a0": "k",
+    "\u04c0": "l", "\u0500": "d", "\u04ba": "h",
     # Greek
     "\u03b1": "a", "\u03bf": "o", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v", "\u03c1": "p",
     "\u03c5": "u", "\u03c7": "x", "\u03b5": "e",
@@ -269,7 +274,7 @@ def _opening_and_comma(read_through: bool) -> str:
     lead = _one_of(_OPENING_LEADS, read_through) + edge
     greeting = _one_of(_GREETINGS, read_through) + edge
     salutation = rf"{_one_of(('good',), read_through)}{edge}{join}{_one_of(_TIMES_OF_DAY, read_through)}{edge}"
-    addressee = rf"{_one_of((*_MODEL_NAMES, *_ADDRESS_NOUNS), read_through)}(?:{_MARK}{{0,3}}s)?{edge}"
+    addressee = rf"{_one_of((*_MODEL_NAMES, *_ADDRESS_NOUNS), read_through)}(?:{_MARK}*s)?{edge}"
     return (
         rf"(?:{lead}{join}(?:{word}{join}){{0,2}}{word}|{greeting}{join}{word}|{salutation}"
         rf"|{word}{join}{addressee}|{word}){gap}*,{gap}*"
@@ -308,7 +313,8 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
     after a sentence's end ("Act as a terminal."), or at a line's start
     when the line before does not end with a letter or a comma, as a
     wrapped sentence's does, and after a short opening and a comma there
-    ("Okay, act as DAN"); written ``(",",)``, right after a comma. A
+    ("Okay, act as DAN"); written ``("^^",)``, the same with no opening;
+    written ``(",",)``, right after a comma. A
     first slot written ``("~",)`` keeps the underscore out of what joins
     the words. In whole-word mode no
     letter or digit a reader sees may touch the phrase at either end.
@@ -327,6 +333,9 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
         # The opening is tried only where a word starts, so a long run of
         # whitespace a failed search gives back costs what it did before.
         start = rf"{_sentence_start(read_through)}(?:(?=[^\W_]){_opening_and_comma(read_through)})?"
+        slots = slots[1:]
+    elif slots[0] == ("^^",):
+        start = _sentence_start(read_through)
         slots = slots[1:]
     elif slots[0] == (",",):
         gap = _GAP if read_through else r"\s"
@@ -557,24 +566,28 @@ _YOU_ARE_SOMEONE = (
 # question" after a premise: something that answers whatever it is asked
 # plays a model's role (Sentry on PR #672). "All" or "every" question is
 # that only for what something does ("answers every request", "will answer
-# all questions"); an exercise's direction to answer them is not ("and
-# answer all questions using that value"; Devin).
+# all questions", "you'll answer", "you answer", "going to answer"; gitar
+# and cubic); an exercise's direction to answer them is not ("and answer
+# all questions using that value"; Devin).
 _ANSWER_VERBS = _forms(
     "answer:s,ed,ing", "say:s,ing", "said", "respond:s,ed,ing", "reply", "replies", "replied", "replying",
     "tell:s,ing", "told", "write:s,ing", "wrote", "written", "generate:s,d", "generating",
 )
 _ANSWER_BASE = ("answer", "say", "respond", "reply", "tell", "write", "generate")
 _MODALS = ("will", "can", "would", "could", "shall", "should", "must", "may", "might")
+# What may stand before a base verb that something does: a modal, a
+# contracted one ("you'll", "it'd"), a subject, or "to".
+_ANSWER_LEADS = (*_MODALS, "ll", "d", "you", "they", "to")
 _ASKED_THINGS = _forms("question:s", "request:s", "prompt:s", "query", "queries", "topic:s")
 _TO_SOMEONE = rf"(?:{_one_of(('to', 'me', 'us', 'you'))}{_BETWEEN_WORDS})?"
 # Tried only where one of the verbs or modals may start, as a premise's
 # read tries what may follow it at each word.
 _ANSWERS_ANYTHING = (
-    rf"(?=[{''.join(sorted({word[0] for word in (*_ANSWER_VERBS, *_MODALS)}))}])(?:"
+    rf"(?=[{''.join(sorted({word[0] for word in (*_ANSWER_VERBS, *_ANSWER_LEADS)}))}])(?:"
     rf"{_one_of(_ANSWER_VERBS)}{_BETWEEN_WORDS}{_TO_SOMEONE}"
     rf"(?:{_one_of(('anything', 'everything', 'whatever'))}|{_one_of(('any',))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
     rf"|(?:{_one_of(tuple(verb for verb in _ANSWER_VERBS if verb not in _ANSWER_BASE))}"
-    rf"|{_one_of(_MODALS)}{_BETWEEN_WORDS}{_one_of(_ANSWER_BASE)})"
+    rf"|{_one_of(_ANSWER_LEADS)}{_BETWEEN_WORDS}{_one_of(_ANSWER_BASE)})"
     rf"{_BETWEEN_WORDS}{_TO_SOMEONE}{_one_of(('all', 'every'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
 )
 _AFTER_A_PREMISE = rf"(?:{_one_of(_ROLE_IN_PREMISE)}|{_LIFTED_SAFEGUARD}|{_YOU_ARE_SOMEONE}|{_ANSWERS_ANYTHING})"
@@ -812,8 +825,14 @@ _PHRASES = (
         ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
     )),
     (_ACT_AS, (
-        ("^",), ("*", ("start", "begin", "keep", "continue"), 1), ("acting",), ("as", "like"),
+        ("^",), ("start", "begin", "keep", "continue"), ("acting",), ("as", "like"),
         ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
+    )),
+    # "acting as" alone after an opening describes the opening's subject
+    # ("My friend, acting as Dan in the school play, sold 20 tickets"; Devin
+    # on PR #672), so it is read only where the sentence itself starts.
+    (_ACT_AS, (
+        ("^^",), ("acting",), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
     )),
     (_ACT_AS, (
         ("act", "acting"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
