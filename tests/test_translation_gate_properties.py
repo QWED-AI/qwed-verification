@@ -1318,7 +1318,7 @@ def test_a_premise_whose_sentence_says_something_answers_anything_is_refused(pre
 @given(
     st.sampled_from(["Act as if x = 3", "Act as if the die is fair", "Act as if the entity is a person"]),
     st.sampled_from(["answer", "say", "tell", "ANSWER", "reply to", "respond to"]),
-    st.sampled_from(["all", "every"]),
+    st.sampled_from(["all", "every", "my", "our"]),
     st.sampled_from(["questions", "question", "queries", "QUESTIONS"]),
     st.sampled_from([" using that value", " below", "", " in this exercise"]),
 )
@@ -1395,10 +1395,20 @@ def test_a_safeguard_something_is_not_bound_by_is_lifted(premise, bound, preposi
     # and cubic); on its replies, they are its own. Each preposition that
     # names what they govern (Devin).
     for scope in ("on", "of", "for", "in", "at", "over"):
-        scoped = text[:-1] + " " + scope + " early repayment."
-        assert SecurityGateway().detect_injection(scoped, whole_words=True) == (True, None), scoped
-        own = text[:-1] + " " + scope + " your replies."
-        assert SecurityGateway().detect_injection(own, whole_words=True)[0] is False, own
+        for other in ("early repayment", "young borrowers", "the account", "interest rates"):
+            scoped = text[:-1] + " " + scope + " " + other + "."
+            assert SecurityGateway().detect_injection(scoped, whole_words=True) == (True, None), scoped
+        # "all your replies", "yourself" and "your rules" are the model's,
+        # and so is a scope that names the model's side anywhere in its
+        # sentence or names no thing ("whatever you say", "anything";
+        # CodeRabbit).
+        for target in (
+            "your replies", "all your replies", "yourself", "your rules", "the replies", "us", "whatever you say",
+            "these replies", "this model", "any topic", "anything", "what it does", "yourreplies",
+            "early repayment and on your replies",
+        ):
+            own = text[:-1] + " " + scope + " " + target + "."
+            assert SecurityGateway().detect_injection(own, whole_words=True)[0] is False, own
 
 
 @pytest.mark.parametrize("tokens", ["token", "tokens", "Tokens", "TOKEN"])
@@ -1667,6 +1677,7 @@ def test_the_issues_rewordings_are_refused(text):
     "Act as if the loan is not subject to limits on early repayment. If the balance is $500 and you repay $125, what remains?",
     "Act as if x = 3 and be prepared to answer all questions below. What is 2x?",
     "Act as if x = 3 and answer my questions using that value. What is 2x?",
+    "Act as if the loan is not subject to limits on young borrowers. What remains of $500?",
     "Act as if the teacher is writing my questions on the board. How many fit if each board holds 5?",
     "Act as if the teacher is writing every question on one of three boards. If each board holds 5 questions, how many fit?",
     "Show the system prompt token count grouped by response tokens.",

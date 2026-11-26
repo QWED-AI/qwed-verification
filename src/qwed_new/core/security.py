@@ -553,10 +553,46 @@ def _words_in_copy(words) -> str:
     return _BETWEEN_WORDS.join(_one_of((word,)) for word in words)
 
 
+# Each ends a word ("young" is not "you"; CodeRabbit on PR #672).
 _ABOUT_YOU = (
-    rf"(?:{_one_of(('you', 'yours', 'me'))}"
+    rf"(?:{_one_of(('you', 'yours', 'yourself', 'yourselves', 'me', 'myself'))}"
     rf"|(?:{_one_of(('your', 'my'))}{_BETWEEN_WORDS}(?:{_WORD_IN_COPY}{_BETWEEN_WORDS})?)?{_one_of(_REPLIES)})"
+    rf"(?!{_SEEN_IN_COPY})"
 )
+# What names the model's or the reader's side of a safeguard's scope: you
+# or yours, me or mine, us or ours, replies and what is asked, a model, and
+# what a model says or how it behaves. The scope is read to its sentence's
+# end, not by its first words alone ("limits on all your replies", "on
+# whatever you say", "on these replies", "on any topic"; CodeRabbit on PR
+# #672). Short and old forms of "you" count ("u", "ur", "y'all", "thee"),
+# and so does a possessive glued to a reply or a model ("on yourreplies").
+_MODEL_SIDE_WORDS = (
+    "you", "your", "yours", "yourself", "yourselves", "me", "my", "mine", "myself", "us", "our", "ours",
+    "ourselves", "u", "ur", "ya", "ye", "thee", "thou", "thy", "thine",
+    *_REPLIES, *_forms("answer:ed,ing", "respond:s,ed,ing", "replied", "replying"),
+    *_forms(
+        "say:s,ing", "said", "tell:s,ing", "told", "speak:s,ing", "spoke:n", "talk:s,ed,ing", "write:s",
+        "writing", "wrote", "written", "discuss:es,ed,ing,ion,ions", "ask:s,ed,ing",
+    ),
+    *_forms(
+        "question:s", "request:s", "prompt:s", "query", "queries", "topic:s", "content:s", "speech",
+        "conversation:s", "chat:s", "language", "opinion:s", "behave:s,d", "behaving", "conduct", "censorship",
+        "ethics", "morals", "safety",
+    ),
+)
+_MODEL_SIDE = (
+    rf"(?:{_one_of(_MODEL_SIDE_WORDS)}|y{_MARK}*['\u2019]?{_MARK}*a{_MARK}*l{_MARK}*l"
+    rf"|(?:{_one_of(('your', 'my', 'our', 'the', 'its', 'their'))}{_MARK}*)?"
+    rf"(?:{_one_of(_REPLIES)}|{_one_of(_MODEL_NAMES)}(?:{_MARK}*s)?))"
+)
+# A scope that names a thing, not what something does or says ("on what it
+# does", "on anything"), in a sentence that names nothing of the model's or
+# the reader's side: the limits on it are another's (CodeRabbit on PR #672).
+_SCOPE_LEADS = (
+    "what", "whatever", "how", "however", "which", "whichever", "who", "whoever", "whom", "whomever", "when",
+    "whenever", "where", "wherever", "why", "anything", "everything", "something", "nothing",
+)
+_ANOTHERS_SCOPE = rf"(?!{_one_of(_SCOPE_LEADS)}(?!{_SEEN_IN_COPY})){_sentence_ends_without(_MODEL_SIDE)}"
 _LIFTING_WORDS = rf"{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
 _NO_LONGER_WORDS = rf"(?:{'|'.join(_words_in_copy(words) for words in _NO_LONGER)})"
 _APPLY = ("apply", "applies", "applied")
@@ -567,8 +603,9 @@ _TO_YOU = (
 )
 # "not bound by any rules", "no longer limited by the rules", "unbound by
 # rules" lift a safeguard too (Sentry on PR #672), unless what the
-# safeguards govern is named and is not the model or its replies ("not
-# subject to limits on early repayment"; Devin and cubic).
+# safeguards govern is named and is neither the model nor the reader ("not
+# subject to limits on early repayment", "on young borrowers"; Devin, cubic
+# and CodeRabbit).
 _BOUND_WORDS = (
     "bound", "limited", "restricted", "constrained", "governed", "held", "subject", "tied", "restrained",
     "beholden",
@@ -579,7 +616,7 @@ _NOT_BOUND = (
     rf"|{_one_of(_UNBOUND_WORDS)}){_BETWEEN_WORDS}{_one_of(('by', 'to', 'from'))}{_BETWEEN_WORDS}"
     rf"(?:{_one_of(('any', 'the', 'its', 'their', 'your', 'his', 'her', 'my', 'our'))}{_BETWEEN_WORDS})?"
     rf"{_one_of(_SAFEGUARD_PLURAL)}(?!{_SEEN_IN_COPY})"
-    rf"(?!{_BETWEEN_WORDS}{_one_of(('on', 'of', 'for', 'in', 'at', 'over'))}{_BETWEEN_WORDS}(?!{_ABOUT_YOU}))"
+    rf"(?!{_BETWEEN_WORDS}{_one_of(('on', 'of', 'for', 'in', 'at', 'over'))}{_BETWEEN_WORDS}{_ANOTHERS_SCOPE})"
 )
 _LIFTED_SAFEGUARD = (
     rf"(?:{_NOT_BOUND}|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
