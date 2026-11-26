@@ -606,8 +606,10 @@ _YOU_ARE_SOMEONE = (
 # plays a model's role (Sentry on PR #672). "All" or "every" question is
 # that only for what something does ("answers every request", "will answer
 # all questions", "you'll answer", "you answer", "going to answer", "I
-# want you to answer"; gitar and cubic), and so is "my" or "our" question,
-# whatever answers it ("a hacker is answering my questions"; Sentry); an exercise's direction to answer
+# want you to answer"; gitar and cubic), and so is "my" or "our" question
+# ("a hacker is answering my questions"; Sentry), read the same way, with
+# the verbs of a reply ("answer my questions using that value" and "the
+# teacher is writing my questions" pass; Devin); an exercise's direction to answer
 # them is not ("and answer all questions using that value", "use that
 # value to answer all questions below"; Devin).
 _ANSWER_VERBS = _forms(
@@ -654,11 +656,10 @@ _TO_SOMEONE = rf"(?:{_one_of(('to', 'me', 'us', 'you'))}{_BETWEEN_WORDS})?"
 _ANSWERS_ANYTHING = (
     rf"(?=[{''.join(sorted({w[0] for w in (*_ANSWER_VERBS, *_ANSWER_LEADS, *_BIDDING_VERBS, *_TO_LEADS, *_FINITE_BE, 'gonna')}))}])(?:"
     rf"{_one_of(_ANSWER_VERBS)}{_BETWEEN_WORDS}{_TO_SOMEONE}"
-    rf"(?:{_one_of(('anything', 'everything', 'whatever'))}"
-    rf"|{_one_of(('any', 'my', 'our'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
+    rf"(?:{_one_of(('anything', 'everything', 'whatever'))}|{_one_of(('any',))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
     rf"|(?:{_one_of(tuple(verb for verb in _RESPONSE_VERBS if verb not in _RESPONSE_BASE))}"
     rf"|{_ANSWER_LEAD}{_BETWEEN_WORDS}{_one_of(_RESPONSE_BASE)})"
-    rf"{_BETWEEN_WORDS}{_TO_SOMEONE}{_one_of(('all', 'every'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
+    rf"{_BETWEEN_WORDS}{_TO_SOMEONE}{_one_of(('all', 'every', 'my', 'our'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
 )
 _AFTER_A_PREMISE = rf"(?:{_one_of(_ROLE_IN_PREMISE)}|{_LIFTED_SAFEGUARD}|{_YOU_ARE_SOMEONE}|{_ANSWERS_ANYTHING})"
 # Combining marks a variable may carry ("x" with a bar, "v" with an arrow).
