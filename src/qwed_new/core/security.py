@@ -566,14 +566,17 @@ _ABOUT_YOU = (
 # whatever you say", "on these replies", "on any topic"; CodeRabbit on PR
 # #672). Short and old forms of "you" count ("u", "ur", "y'all", "thee"),
 # and so does a possessive glued to a reply or a model ("on yourreplies").
-_MODEL_SIDE_WORDS = (
-    "you", "your", "yours", "yourself", "yourselves", "me", "my", "mine", "myself", "us", "our", "ours",
-    "ourselves", "u", "ur", "ya", "ye", "thee", "thou", "thy", "thine",
-    *_REPLIES, *_forms("answer:ed,ing", "respond:s,ed,ing", "replied", "replying"),
+_SPEECH_VERBS = (
+    *_forms("answer:s,ed,ing", "respond:s,ed,ing", "reply", "replies", "replied", "replying"),
     *_forms(
         "say:s,ing", "said", "tell:s,ing", "told", "speak:s,ing", "spoke:n", "talk:s,ed,ing", "write:s",
-        "writing", "wrote", "written", "discuss:es,ed,ing,ion,ions", "ask:s,ed,ing",
+        "writing", "wrote", "written", "discuss:es,ed,ing", "ask:s,ed,ing",
     ),
+)
+_POSSESSIVES = ("your", "my", "our", "ur", "youre", "yer", "thy", "thine")
+_MODEL_SIDE_WORDS = (
+    "you", "yours", "yourself", "yourselves", "me", "mine", "myself", "us", "ours", "ourselves", "u", "ya", "ye",
+    "thee", "thou", *_POSSESSIVES, *_REPLIES, *_SPEECH_VERBS, "discussion", "discussions",
     *_forms(
         "question:s", "request:s", "prompt:s", "query", "queries", "topic:s", "content:s", "speech",
         "conversation:s", "chat:s", "language", "opinion:s", "behave:s,d", "behaving", "conduct", "censorship",
@@ -588,18 +591,73 @@ _MODEL_SIDE = (
 # A scope that names a thing, not what something does or says ("on what it
 # does", "on anything"), in a sentence that names nothing of the model's or
 # the reader's side: the limits on it are another's (CodeRabbit on PR #672).
+# An amount is a thing ("on how much a borrower can repay early"; Devin).
 _SCOPE_LEADS = (
     "what", "whatever", "how", "however", "which", "whichever", "who", "whoever", "whom", "whomever", "when",
     "whenever", "where", "wherever", "why", "anything", "everything", "something", "nothing",
 )
-_ANOTHERS_SCOPE = rf"(?!{_one_of(_SCOPE_LEADS)}(?!{_SEEN_IN_COPY})){_sentence_ends_without(_MODEL_SIDE)}"
+_AN_AMOUNT = rf"(?={_one_of(('how',))}{_BETWEEN_WORDS}{_one_of(('much', 'many'))}(?!{_SEEN_IN_COPY}))"
+# "You" that starts a clause of its own after the scope is the one doing the
+# exercise, not what the limits govern ("limits on early repayment and you
+# pay $125"; Devin): passed over, while the words after it are read. "You"
+# joined to the scope ("and you", "and you all", "and you, the robot") is
+# read.
+_CLAUSE_LEADS = (
+    "and", "but", "so", "then", "while", "when", "whenever", "if", "once", "or", "after", "before", "until",
+    "because", "whereas", "as",
+)
+_NOT_A_CLAUSE = (
+    "and", "or", "nor", "all", "both", "alone", "too", "also", "only", "guys", "folks", "yourself",
+    "yourselves", "included", "including",
+)
+_CLAUSE_YOU = (
+    rf"(?:(?<!{_SEEN_IN_COPY}){_one_of(_CLAUSE_LEADS)}{_BETWEEN_WORDS}|,{_GAP}*){_one_of(('you', 'u'))}"
+    rf"(?={_GAP}+(?!{_one_of(_NOT_A_CLAUSE)}(?!{_SEEN_IN_COPY}))[^\W\d_])"
+)
+_ANOTHERS_SCOPE = (
+    rf"(?:{_AN_AMOUNT}|(?!{_one_of(_SCOPE_LEADS)}(?!{_SEEN_IN_COPY})))"
+    rf"{_sentence_ends_without(_MODEL_SIDE, skip=_CLAUSE_YOU)}"
+)
 _LIFTING_WORDS = rf"{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
 _NO_LONGER_WORDS = rf"(?:{'|'.join(_words_in_copy(words) for words in _NO_LONGER)})"
 _APPLY = ("apply", "applies", "applied")
-# "applies to your replies", "on your answers", "for you".
+# What a maths or money exercise may own: "no restriction applies to your
+# variable y", "no limit on your budget".
+_OPERAND_NOUNS = _forms(
+    "variable:s", "value:s", "function:s", "equation:s", "expression:s", "number:s", "integer:s", "constant:s",
+    "parameter:s", "coefficient:s", "term:s", "vector:s", "matrix", "matrices", "set:s", "sequence:s", "series",
+    "graph:s", "point:s", "angle:s", "side:s", "shape:s", "domain", "range", "sum:s", "product:s", "total:s",
+    "budget:s", "balance:s", "account:s", "saving:s", "money", "income", "loan:s", "payment:s", "spending",
+    "salary", "deposit:s", "withdrawal:s", "investment:s", "portfolio", "purchase:s", "order:s", "score:s",
+    "guess:es", "estimate:s", "choice:s", "pick:s", "move:s", "turn:s", "bet:s", "stake:s", "time", "speed",
+    "distance", "weight", "height", "age", "dice", "die", "coin:s", "card:s", "hand", "piece:s", "team:s",
+)
+# A singular safeguard is the model's when it is about you or yours, a
+# possessive's word that no exercise owns ("no restriction applies to your
+# words", "to your thoughts", "to any of your actions"; gitar on PR #672),
+# or what you say ("no limit on what you say"). A letter alone is an
+# operand ("no restriction on my x").
+_YOUR_THING = (
+    rf"{_one_of(_POSSESSIVES)}{_BETWEEN_WORDS}(?:{_one_of(('own', 'very'))}{_BETWEEN_WORDS})?"
+    rf"(?!{_one_of((*_OPERAND_NOUNS, 'own', 'very'))}(?!{_SEEN_IN_COPY}))(?![^\W\d_](?!{_SEEN_IN_COPY}))"
+    rf"{_WORD_IN_COPY}"
+)
+_SAYING_VERBS = (
+    *_SPEECH_VERBS,
+    *_forms("output:s,ted,ting", "generate:s,d", "generating", "produce:s,d", "producing", "do", "does", "did"),
+    "doing",
+)
+_WHAT_YOU_SAY = (
+    rf"{_one_of(_SCOPE_LEADS)}{_BETWEEN_WORDS}{_one_of(('you', 'u', 'i', 'we', 'ya', 'ye', 'thou'))}"
+    rf"{_BETWEEN_WORDS}(?:{_one_of(('will', 'can', 'would', 'could', 'shall', 'should', 'must', 'may', 'might'))}"
+    rf"{_BETWEEN_WORDS})?{_one_of(_SAYING_VERBS)}(?!{_SEEN_IN_COPY})"
+)
+# "applies to your replies", "on your answers", "for you", after up to two
+# of "all", "any", "of" and the like ("to all your replies").
 _TO_YOU = (
     rf"(?:{_one_of(_APPLY)}{_BETWEEN_WORDS})?{_one_of(('to', 'on', 'for', 'over'))}{_BETWEEN_WORDS}"
-    rf"{_ABOUT_YOU}"
+    rf"(?:{_one_of(('all', 'any', 'every', 'each', 'the', 'both', 'of'))}{_BETWEEN_WORDS}){{0,2}}"
+    rf"(?:{_ABOUT_YOU}|{_YOUR_THING}|{_WHAT_YOU_SAY})"
 )
 # "not bound by any rules", "no longer limited by the rules", "unbound by
 # rules" lift a safeguard too (Sentry on PR #672), unless what the
