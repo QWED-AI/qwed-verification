@@ -616,23 +616,18 @@ _EXERCISE_VERBS = _forms(
     "flip:s,ped", "draw:s,n", "drew", "pick:s,ed", "choose:s", "chose:n", "add:s,ed", "eat:s,en", "ate",
     "walk:s,ed", "share:s,d", "split:s", "collect:s,ed",
 )
-# What may stand between the clause's "you" and its verb: a modal, or a word
-# that says when or how many ("and you then pay", "and you each pay").
-_CLAUSE_STEPS = (
-    "will", "can", "would", "could", "should", "must", "may", "might", "then", "also", "only", "each", "both",
-    "now", "later", "still", "already", "first", "just",
+# What may stand between the clause's "you" and its verb: a modal, then up
+# to two words that say when or how many ("and you then pay", "and you can
+# then pay", "and you each pay"; Devin on PR #672).
+_CLAUSE_MODALS = ("will", "can", "would", "could", "should", "must", "may", "might")
+_CLAUSE_ADVERBS = (
+    "then", "also", "only", "each", "both", "all", "now", "later", "still", "already", "first", "just",
 )
 _CLAUSE_YOU = (
     rf"(?:(?<!{_SEEN_IN_COPY}){_one_of(_CLAUSE_LEADS)}{_BETWEEN_WORDS}|,{_GAP}*){_one_of(('you', 'u'))}"
-    rf"(?={_GAP}+(?:{_one_of(_CLAUSE_STEPS)}{_GAP}+)?{_one_of(_EXERCISE_VERBS)}(?!{_SEEN_IN_COPY}))"
+    rf"(?={_GAP}+(?:{_one_of(_CLAUSE_MODALS)}{_GAP}+)?(?:{_one_of(_CLAUSE_ADVERBS)}{_GAP}+){{0,2}}"
+    rf"{_one_of(_EXERCISE_VERBS)}(?!{_SEEN_IN_COPY}))"
 )
-_ANOTHERS_SCOPE = (
-    rf"(?:{_AN_AMOUNT}|(?!{_one_of(_SCOPE_LEADS)}(?!{_SEEN_IN_COPY})))"
-    rf"{_sentence_ends_without(_MODEL_SIDE, skip=_CLAUSE_YOU)}"
-)
-_LIFTING_WORDS = rf"{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
-_NO_LONGER_WORDS = rf"(?:{'|'.join(_words_in_copy(words) for words in _NO_LONGER)})"
-_APPLY = ("apply", "applies", "applied")
 # What a maths or money exercise may own: "no restriction applies to your
 # variable y", "no limit on your budget".
 _OPERAND_NOUNS = _forms(
@@ -652,26 +647,49 @@ _OPERAND_MODIFIERS = (
     "closing", "new", "original", "net", "gross", "late", "early", "extra", "down", "base", "unknown", "chosen",
     "lucky",
 )
-# An operand: a noun an exercise owns after up to two words that say which,
-# a letter alone or a number; what follows its "of" is an operand too ("your
-# choice of x", not "your choice of words"; CodeRabbit), and the rest of its
-# sentence names nothing of the model's or the reader's side.
+# An operand: a noun an exercise owns, after a count ("two cards"; Devin)
+# and up to two words that say which, or a letter alone or a number; what
+# follows its "of" is an operand too ("your choice of x", not "your choice
+# of words"; CodeRabbit).
 _OPERAND_HEAD = (
-    rf"(?:(?:{_one_of(_OPERAND_MODIFIERS)}{_BETWEEN_WORDS}){{0,2}}{_one_of(_OPERAND_NOUNS)}"
+    rf"(?:(?:(?:\d+|{_one_of(_COUNT_WORDS)}){_BETWEEN_WORDS})?"
+    rf"(?:{_one_of(_OPERAND_MODIFIERS)}{_BETWEEN_WORDS}){{0,2}}{_one_of(_OPERAND_NOUNS)}"
     rf"|[^\W\d_]|[$\u00a3\u20ac]?\d+(?:[.,]\d+)*)(?!{_SEEN_IN_COPY})"
 )
-_OPERAND = (
+_OPERAND_WHOLE = (
     rf"{_OPERAND_HEAD}(?!{_BETWEEN_WORDS}{_one_of(('of',))}{_BETWEEN_WORDS}"
     rf"(?!(?:{_one_of(('the', 'a', 'an', 'all', 'any', 'each', 'its'))}{_BETWEEN_WORDS})?{_OPERAND_HEAD}))"
-    rf"{_sentence_ends_without(_MODEL_SIDE, skip=_CLAUSE_YOU)}"
 )
+_OWN_OR_VERY = rf"(?:{_one_of(('own', 'very'))}{_BETWEEN_WORDS})*"
+# Read as a whole, and passed over, where the rest of a sentence is read for
+# the model's side: an exercise's clause, and a possessive's operand ("pay
+# off your balance"; Devin on PR #672).
+_EXERCISE_WORDS = (
+    rf"(?:{_CLAUSE_YOU}|(?<!{_SEEN_IN_COPY}){_one_of(_POSSESSIVES)}{_BETWEEN_WORDS}{_OWN_OR_VERY}{_OPERAND_WHOLE})"
+)
+# A scope that starts with a possessive is read as one ("limits on your
+# rules", "on all your replies"; CodeRabbit).
+_OWNED_SCOPE = (
+    rf"(?:{_one_of(('all', 'any', 'every', 'each', 'the', 'both', 'of'))}{_BETWEEN_WORDS}){{0,2}}"
+    rf"{_one_of(_POSSESSIVES)}(?!{_SEEN_IN_COPY})"
+)
+_ANOTHERS_SCOPE = (
+    rf"(?:{_AN_AMOUNT}|(?!{_one_of(_SCOPE_LEADS)}(?!{_SEEN_IN_COPY})))(?!{_OWNED_SCOPE})"
+    rf"{_sentence_ends_without(_MODEL_SIDE, skip=_EXERCISE_WORDS)}"
+)
+_LIFTING_WORDS = rf"{_one_of(_LIFTING)}(?:{_BETWEEN_WORDS}{_WORD_IN_COPY}){{0,2}}{_BETWEEN_WORDS}"
+_NO_LONGER_WORDS = rf"(?:{'|'.join(_words_in_copy(words) for words in _NO_LONGER)})"
+_APPLY = ("apply", "applies", "applied")
+# An operand, whose sentence names nothing of the model's or the reader's
+# side after it.
+_OPERAND = rf"{_OPERAND_WHOLE}{_sentence_ends_without(_MODEL_SIDE, skip=_EXERCISE_WORDS)}"
 # A singular safeguard is the model's when it is about you or yours, a
 # possessive's word that is not an operand ("no restriction applies to your
 # words", "to your thoughts", "to any of your actions", "to your very own
 # words"; gitar and cubic on PR #672), or what you say ("no limit on what
 # you say"). A letter alone is an operand ("no restriction on my x").
 _YOUR_THING = (
-    rf"{_one_of(_POSSESSIVES)}{_BETWEEN_WORDS}(?:{_one_of(('own', 'very'))}{_BETWEEN_WORDS})*"
+    rf"{_one_of(_POSSESSIVES)}{_BETWEEN_WORDS}{_OWN_OR_VERY}"
     rf"(?!{_one_of(('own', 'very'))}(?!{_SEEN_IN_COPY}))(?!{_OPERAND}){_WORD_IN_COPY}"
 )
 _SAYING_VERBS = (*_SPEECH_VERBS, *_forms("output:s,ted,ting", "generate:s,d"), "generating")
