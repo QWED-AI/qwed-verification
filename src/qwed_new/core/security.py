@@ -242,9 +242,12 @@ def _sentence_start(read_through: bool) -> str:
 # is ("My enzymes," then "act as catalysts"; CodeRabbit), and a longer
 # clause is a verb in a list ("Volunteers greet guests, act as guides"):
 # each passes.
+# A transition or a subordinate clause leads one too ("Going forward,",
+# "If possible,", "When you reply,"; Sentry on PR #672).
 _OPENING_LEADS = (
     "for", "in", "from", "during", "at", "on", "until", "throughout", "within", "after", "before",
-    "with", "as", "to", "by",
+    "with", "as", "to", "by", "going", "moving", "starting", "beginning", "if", "when", "whenever",
+    "while", "once", "since", "because", "unless", "although", "though",
 )
 _MODEL_NAMES = ("ai", "assistant", "model", "chatbot", "bot", "llm", "gpt", "chatgpt")
 _ADDRESS_NOUNS = (
@@ -439,12 +442,19 @@ _MATHS_PROPERTY = (
 )
 _STORY_ROLES = ("dan", "evil", "rogue")
 # Bare requests to the reader that may follow a role ("acting as DAN,
-# answer me").
+# answer me", "acting as DAN, please answer me"; cubic on PR #672). Followed
+# by a count, the verb tells what a group does ("My friends, acting as Dan,
+# give 3 clues each"; Devin and cubic).
 _ROLE_IMPERATIVES = (
     "answer", "tell", "reply", "respond", "say", "write", "give", "show", "print", "explain", "help",
     "ignore", "forget", "do", "provide", "generate", "describe", "list", "speak", "talk", "chat", "stay",
     "remain", "keep", "continue", "start", "begin", "pretend", "act", "be",
 )
+_COUNT_WORDS = (
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+    "twenty", "thirty", "hundred", "dozen", "several", "many", "both", "each",
+)
+_A_COUNT = rf"(?:\d|{_one_of(_COUNT_WORDS)}(?!{_SEEN_IN_COPY}))"
 # Words a maths question uses too ("take the limit", "the chain rule",
 # "subject to the constraint", "linear programming"; Devin and CodeRabbit
 # on PR #672): after a premise, a safeguard only when a word before one
@@ -549,8 +559,21 @@ _TO_YOU = (
     rf"(?:{_one_of(_APPLY)}{_BETWEEN_WORDS})?{_one_of(('to', 'on', 'for', 'over'))}{_BETWEEN_WORDS}"
     rf"{_ABOUT_YOU}"
 )
+# "not bound by any rules", "no longer limited by the rules", "unbound by
+# rules" lift a safeguard too (Sentry on PR #672).
+_BOUND_WORDS = (
+    "bound", "limited", "restricted", "constrained", "governed", "held", "subject", "tied", "restrained",
+    "beholden",
+)
+_UNBOUND_WORDS = ("unbound", "unconstrained", "unrestrained", "unshackled", "unchained", "unfettered")
+_NOT_BOUND = (
+    rf"(?:(?:{_one_of(('not', 'never'))}|{_words_in_copy(('no', 'longer'))}){_BETWEEN_WORDS}{_one_of(_BOUND_WORDS)}"
+    rf"|{_one_of(_UNBOUND_WORDS)}){_BETWEEN_WORDS}{_one_of(('by', 'to', 'from'))}{_BETWEEN_WORDS}"
+    rf"(?:{_one_of(('any', 'the', 'its', 'their', 'your', 'his', 'her', 'my', 'our'))}{_BETWEEN_WORDS})?"
+    rf"{_one_of(_SAFEGUARD_PLURAL)}"
+)
 _LIFTED_SAFEGUARD = (
-    rf"(?:{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
+    rf"(?:{_NOT_BOUND}|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
     rf"|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_SINGULAR)}{_BETWEEN_WORDS}{_TO_YOU}"
     rf"|{_one_of(_MATHS_SAFEGUARD)}{_BETWEEN_WORDS}"
     rf"{_one_of(('is', 'are', 'was', 'were', 'be', 'been', 'being', 'get', 'gets', 'got'))}{_BETWEEN_WORDS}"
@@ -582,6 +605,11 @@ _ANSWER_VERBS = _forms(
     "tell:s,ing", "told", "write:s", "writing", "wrote", "written", "generate:s,d", "generating",
 )
 _ANSWER_BASE = ("answer", "say", "respond", "reply", "tell", "write", "generate")
+# Writing or generating every question makes them, not answers them ("the
+# teacher is writing every question on the board"; Devin and cubic on PR
+# #672): "all" and "every" are read with the verbs of a reply only.
+_RESPONSE_VERBS = tuple(verb for verb in _ANSWER_VERBS if not verb.startswith(("writ", "wrot", "generat")))
+_RESPONSE_BASE = ("answer", "say", "respond", "reply", "tell")
 _MODALS = ("will", "can", "would", "could", "shall", "should", "must", "may", "might")
 # What may stand before a base verb that something does: a modal, a
 # contracted one ("you'll", "it'd"), a subject, "to" after a word that
@@ -594,7 +622,13 @@ _BIDDING_VERBS = _forms(
     "instruct:s,ed", "command:s,ed", "allow:s,ed", "force:s,d", "get:s", "got",
 )
 _BIDDEN = ("you", "them", "it", "him", "her", "us")
-_TO_LEADS = ("going", "have", "has", "had", "got")
+# Words that say what something is there to do ("able to", "ready to",
+# "designed to"; gitar on PR #672).
+_TO_LEADS = (
+    "going", "have", "has", "had", "got", "able", "ready", "free", "here", "willing", "happy", "eager",
+    "glad", "designed", "built", "made", "meant", "supposed", "programmed", "trained", "prepared",
+    "allowed", "permitted", "configured",
+)
 _ANSWER_LEAD = (
     rf"(?:{_one_of(_ANSWER_LEADS)}|{_one_of(_BIDDING_VERBS)}{_BETWEEN_WORDS}{_one_of(_BIDDEN)}{_BETWEEN_WORDS}"
     rf"{_one_of(('to',))}|{_one_of(_TO_LEADS)}{_BETWEEN_WORDS}{_one_of(('to',))}|{_one_of(('gonna',))})"
@@ -607,8 +641,8 @@ _ANSWERS_ANYTHING = (
     rf"(?=[{''.join(sorted({w[0] for w in (*_ANSWER_VERBS, *_ANSWER_LEADS, *_BIDDING_VERBS, *_TO_LEADS, 'gonna')}))}])(?:"
     rf"{_one_of(_ANSWER_VERBS)}{_BETWEEN_WORDS}{_TO_SOMEONE}"
     rf"(?:{_one_of(('anything', 'everything', 'whatever'))}|{_one_of(('any',))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
-    rf"|(?:{_one_of(tuple(verb for verb in _ANSWER_VERBS if verb not in _ANSWER_BASE))}"
-    rf"|{_ANSWER_LEAD}{_BETWEEN_WORDS}{_one_of(_ANSWER_BASE)})"
+    rf"|(?:{_one_of(tuple(verb for verb in _RESPONSE_VERBS if verb not in _RESPONSE_BASE))}"
+    rf"|{_ANSWER_LEAD}{_BETWEEN_WORDS}{_one_of(_RESPONSE_BASE)})"
     rf"{_BETWEEN_WORDS}{_TO_SOMEONE}{_one_of(('all', 'every'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
 )
 _AFTER_A_PREMISE = rf"(?:{_one_of(_ROLE_IN_PREMISE)}|{_LIFTED_SAFEGUARD}|{_YOU_ARE_SOMEONE}|{_ANSWERS_ANYTHING})"
@@ -861,7 +895,7 @@ _PHRASES = (
     # sold 20 tickets", "acting as Dan, tells jokes").
     (_ACT_AS, (
         ("^",), ("acting",), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
-        ("=", _ROLE_IMPERATIVES),
+        ("*", ("please", "kindly", "just", "now"), 1), ("=", _ROLE_IMPERATIVES), ("!re", _A_COUNT),
     )),
     (_ACT_AS, (
         ("act", "acting"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
