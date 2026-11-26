@@ -720,26 +720,42 @@ _PRODUCTION_NOUNS = (
     ),
     "batch", "batches", "factory", "factories", "staff", "person", "people",
 )
-_SUBJECTS = ("you", "u", "i", "we", "they", "he", "she", "it")
-# The determiners a data source may take ("from the logs"), and the ones a
-# clause's subject may take.
+# The determiners a data source may take ("from the logs").
 _SOURCE_DETERMINERS = ("the", "a", "an", "our", "this", "that", "these", "those", "each", "every", "all")
-_DETERMINERS = (*_SOURCE_DETERMINERS, "my", "your", "his", "her", "its", "their", "some", "any")
 _COORDINATORS = ("and", "or")
-# Where the doing's own words end: a comma; "but", "so", "if" and the like;
-# "and" or "or" before a subject or a determiner ("and you pay", "and the
-# workers pay"), not between two words of one phrase ("red or blue parts";
-# Devin); a time word unless a time follows it ("before the end of the shift"
-# says when, "before workers produce" starts a clause; CodeRabbit, cubic and
-# Devin on PR #672).
+# Words that say which of an exercise's things, joined by "and" or "or" in one
+# phrase ("red or blue parts"; Devin on PR #672).
+_PHRASE_WORDS = (
+    *_OPERAND_MODIFIERS, "red", "blue", "green", "yellow", "black", "white", "orange", "purple", "pink", "brown",
+    "grey", "gray", "small", "large", "big", "little", "long", "short", "tall", "full", "empty", "whole", "half",
+)
+_EXERCISE_NOUNS = (*_OPERAND_NOUNS, *_PRODUCTION_NOUNS)
+# A list's word, and what may follow it in one phrase: a comma, "and" or "or".
+# A word that says which, a noun of an exercise or a count is passed over as a
+# unit with what follows it when the list ends, within four more of its words,
+# in a noun of an exercise ("red or blue parts", "red, white or blue parts", "3
+# or 4 parts", "parts and machines"). Anywhere else a comma, "and" or "or"
+# ends the doing's words, so "do and reveal 5 secrets" and "now and workers pay
+# $5" do (gitar on PR #672).
+_LIST_ITEM = (
+    rf"(?:{_one_of((*_PHRASE_WORDS, *_EXERCISE_NOUNS, *_COUNT_WORDS))}|\d+)(?!{_SEEN_IN_COPY})"
+)
+_LIST_JOIN = rf"{_BETWEEN_WORDS}(?:{_one_of(_COORDINATORS)}{_BETWEEN_WORDS})?"
+_COORDINATED = (
+    rf"(?<!{_SEEN_IN_COPY}){_LIST_ITEM}{_LIST_JOIN}"
+    rf"(?=(?:{_LIST_ITEM}{_LIST_JOIN}){{0,4}}{_one_of(_EXERCISE_NOUNS)}(?!{_SEEN_IN_COPY}))"
+)
+# Where the doing's own words end: a comma; "and", "or", "but", "so", "if" and
+# the like, but for a phrase's "and" or "or"; a time word unless a time follows
+# it ("before the end of the shift" says when, "before workers produce" starts
+# a clause; CodeRabbit, cubic and Devin on PR #672).
 _A_TIME = (
     rf"(?:{_one_of(('the', 'a', 'an', 'each', 'every'))}{_BETWEEN_WORDS})?"
     rf"(?:{_one_of((*_TIME_WORDS, *_TIME_NOUNS))}(?!{_SEEN_IN_COPY})|\d)"
 )
 _A_CLAUSE_STARTS = (
     rf"(?:,|(?<!{_SEEN_IN_COPY})(?:"
-    rf"{_one_of(tuple(w for w in _CLAUSE_LEADS if w not in (*_SUBJECT_LEADS, *_COORDINATORS)))}(?!{_SEEN_IN_COPY})"
-    rf"|{_one_of(_COORDINATORS)}{_BETWEEN_WORDS}{_one_of((*_SUBJECTS, *_DETERMINERS))}(?!{_SEEN_IN_COPY})"
+    rf"{_one_of(tuple(w for w in _CLAUSE_LEADS if w not in _SUBJECT_LEADS))}(?!{_SEEN_IN_COPY})"
     rf"|{_one_of(_SUBJECT_LEADS)}(?!{_SEEN_IN_COPY})(?!{_BETWEEN_WORDS}{_A_TIME})))"
 )
 # What shows the doing is an exercise's: in its own words, before a comma or a
@@ -749,8 +765,8 @@ _A_CLAUSE_STARTS = (
 # can do at all" shows none (CodeRabbit), and "what you can do now and you pay
 # $5" shows none of its own (gitar and cubic).
 _EXERCISE_EVIDENCE = (
-    rf"(?=(?:(?!{_SENTENCE_END})(?!{_A_CLAUSE_STARTS})[\s\S]){{0,{_SENTENCE_READ}}}?(?<!{_SEEN_IN_COPY})"
-    rf"(?:[$\u00a3\u20ac]?\d|(?:{_one_of((*_OPERAND_NOUNS, *_PRODUCTION_NOUNS))}"
+    rf"(?=(?:{_COORDINATED}|(?!{_SENTENCE_END})(?!{_A_CLAUSE_STARTS})[\s\S]){{0,{_SENTENCE_READ}}}?(?<!{_SEEN_IN_COPY})"
+    rf"(?:[$\u00a3\u20ac]?\d|(?:{_one_of(_EXERCISE_NOUNS)}"
     rf"|(?<!['\u2019])(?![ai](?!{_SEEN_IN_COPY}))[^\W\d_](?!['\u2019]))(?!{_SEEN_IN_COPY})))"
 )
 _WHAT_YOU_SAY = (
