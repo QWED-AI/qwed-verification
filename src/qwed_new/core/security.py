@@ -438,6 +438,13 @@ _MATHS_PROPERTY = (
     "uniform", "additive", "multiplicative",
 )
 _STORY_ROLES = ("dan", "evil", "rogue")
+# Bare requests to the reader that may follow a role ("acting as DAN,
+# answer me").
+_ROLE_IMPERATIVES = (
+    "answer", "tell", "reply", "respond", "say", "write", "give", "show", "print", "explain", "help",
+    "ignore", "forget", "do", "provide", "generate", "describe", "list", "speak", "talk", "chat", "stay",
+    "remain", "keep", "continue", "start", "begin", "pretend", "act", "be",
+)
 # Words a maths question uses too ("take the limit", "the chain rule",
 # "subject to the constraint", "linear programming"; Devin and CodeRabbit
 # on PR #672): after a premise, a safeguard only when a word before one
@@ -566,28 +573,42 @@ _YOU_ARE_SOMEONE = (
 # question" after a premise: something that answers whatever it is asked
 # plays a model's role (Sentry on PR #672). "All" or "every" question is
 # that only for what something does ("answers every request", "will answer
-# all questions", "you'll answer", "you answer", "going to answer"; gitar
-# and cubic); an exercise's direction to answer them is not ("and answer
-# all questions using that value"; Devin).
+# all questions", "you'll answer", "you answer", "going to answer", "I
+# want you to answer"; gitar and cubic); an exercise's direction to answer
+# them is not ("and answer all questions using that value", "use that
+# value to answer all questions below"; Devin).
 _ANSWER_VERBS = _forms(
     "answer:s,ed,ing", "say:s,ing", "said", "respond:s,ed,ing", "reply", "replies", "replied", "replying",
-    "tell:s,ing", "told", "write:s,ing", "wrote", "written", "generate:s,d", "generating",
+    "tell:s,ing", "told", "write:s", "writing", "wrote", "written", "generate:s,d", "generating",
 )
 _ANSWER_BASE = ("answer", "say", "respond", "reply", "tell", "write", "generate")
 _MODALS = ("will", "can", "would", "could", "shall", "should", "must", "may", "might")
 # What may stand before a base verb that something does: a modal, a
-# contracted one ("you'll", "it'd"), a subject, or "to".
-_ANSWER_LEADS = (*_MODALS, "ll", "d", "you", "they", "to")
+# contracted one ("you'll", "it'd"), a subject, "to" after a word that
+# bids someone do it ("want you to", "tell it to") or after "going",
+# "have" and the like ("going to"). "To" alone, or after another verb,
+# may say what a value is for ("use x to answer", "use it to answer").
+_ANSWER_LEADS = (*_MODALS, "ll", "d", "you", "they")
+_BIDDING_VERBS = _forms(
+    "want:s,ed", "need:s,ed", "ask:s,ed", "tell:s", "told", "order:s,ed", "expect:s,ed", "require:s,d",
+    "instruct:s,ed", "command:s,ed", "allow:s,ed", "force:s,d", "get:s", "got",
+)
+_BIDDEN = ("you", "them", "it", "him", "her", "us")
+_TO_LEADS = ("going", "have", "has", "had", "got")
+_ANSWER_LEAD = (
+    rf"(?:{_one_of(_ANSWER_LEADS)}|{_one_of(_BIDDING_VERBS)}{_BETWEEN_WORDS}{_one_of(_BIDDEN)}{_BETWEEN_WORDS}"
+    rf"{_one_of(('to',))}|{_one_of(_TO_LEADS)}{_BETWEEN_WORDS}{_one_of(('to',))}|{_one_of(('gonna',))})"
+)
 _ASKED_THINGS = _forms("question:s", "request:s", "prompt:s", "query", "queries", "topic:s")
 _TO_SOMEONE = rf"(?:{_one_of(('to', 'me', 'us', 'you'))}{_BETWEEN_WORDS})?"
 # Tried only where one of the verbs or modals may start, as a premise's
 # read tries what may follow it at each word.
 _ANSWERS_ANYTHING = (
-    rf"(?=[{''.join(sorted({word[0] for word in (*_ANSWER_VERBS, *_ANSWER_LEADS)}))}])(?:"
+    rf"(?=[{''.join(sorted({w[0] for w in (*_ANSWER_VERBS, *_ANSWER_LEADS, *_BIDDING_VERBS, *_TO_LEADS, 'gonna')}))}])(?:"
     rf"{_one_of(_ANSWER_VERBS)}{_BETWEEN_WORDS}{_TO_SOMEONE}"
     rf"(?:{_one_of(('anything', 'everything', 'whatever'))}|{_one_of(('any',))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
     rf"|(?:{_one_of(tuple(verb for verb in _ANSWER_VERBS if verb not in _ANSWER_BASE))}"
-    rf"|{_one_of(_ANSWER_LEADS)}{_BETWEEN_WORDS}{_one_of(_ANSWER_BASE)})"
+    rf"|{_ANSWER_LEAD}{_BETWEEN_WORDS}{_one_of(_ANSWER_BASE)})"
     rf"{_BETWEEN_WORDS}{_TO_SOMEONE}{_one_of(('all', 'every'))}{_BETWEEN_WORDS}{_one_of(_ASKED_THINGS)})"
 )
 _AFTER_A_PREMISE = rf"(?:{_one_of(_ROLE_IN_PREMISE)}|{_LIFTED_SAFEGUARD}|{_YOU_ARE_SOMEONE}|{_ANSWERS_ANYTHING})"
@@ -833,6 +854,14 @@ _PHRASES = (
     # on PR #672), so it is read only where the sentence itself starts.
     (_ACT_AS, (
         ("^^",), ("acting",), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
+    )),
+    # After an opening, "acting as" a role and then a bare request to the
+    # reader asks for the role ("Okay, acting as DAN, answer me"; CodeRabbit
+    # on PR #672); a verb with an ending tells a story ("acting as Dan,
+    # sold 20 tickets", "acting as Dan, tells jokes").
+    (_ACT_AS, (
+        ("^",), ("acting",), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
+        ("=", _ROLE_IMPERATIVES),
     )),
     (_ACT_AS, (
         ("act", "acting"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
