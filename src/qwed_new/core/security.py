@@ -705,34 +705,53 @@ _SAYING_VERBS = (*_SPEECH_VERBS, *_forms("output:s,ted,ting", "generate:s,d"), "
 # must follow it, not a clause of its own ("what you can do and you pay $5"
 # is the model's).
 _DOING_VERBS = (*_forms("produce:s,d", "do", "does", "did"), "producing", "doing")
-# What a production or a time names in an exercise ("on the assembly line",
-# "in a day").
+# What a time names in an exercise ("in a day", "before the end of the
+# shift").
+_TIME_NOUNS = _forms("day:s", "week:s", "month:s", "year:s", "hour:s", "minute:s", "shift:s")
+_TIME_WORDS = (
+    *_forms("end:s", "start:s"), "beginning", "close", "middle", "noon", "midnight", "deadline", "morning", "evening",
+)
+# What a production names in an exercise ("on the assembly line").
 _PRODUCTION_NOUNS = (
+    *_TIME_NOUNS,
     *_forms(
-        "day:s", "week:s", "month:s", "year:s", "hour:s", "minute:s", "unit:s", "item:s", "part:s", "widget:s",
-        "line:s", "machine:s", "shift:s", "farm:s", "field:s", "acre:s", "tree:s", "crate:s", "worker:s",
-        "employee:s", "crew:s",
+        "unit:s", "item:s", "part:s", "widget:s", "line:s", "machine:s", "farm:s", "field:s", "acre:s", "tree:s",
+        "crate:s", "worker:s", "employee:s", "crew:s",
     ),
     "batch", "batches", "factory", "factories", "staff", "person", "people",
 )
-# Where the doing's own words end: a comma, or a word that starts a clause of
-# its own, a subject lead only before a subject (gitar, cubic and Devin on PR
-# #672).
+_SUBJECTS = ("you", "u", "i", "we", "they", "he", "she", "it")
+# The determiners a data source may take ("from the logs"), and the ones a
+# clause's subject may take.
+_SOURCE_DETERMINERS = ("the", "a", "an", "our", "this", "that", "these", "those", "each", "every", "all")
+_DETERMINERS = (*_SOURCE_DETERMINERS, "my", "your", "his", "her", "its", "their", "some", "any")
+_COORDINATORS = ("and", "or")
+# Where the doing's own words end: a comma; "but", "so", "if" and the like;
+# "and" or "or" before a subject or a determiner ("and you pay", "and the
+# workers pay"), not between two words of one phrase ("red or blue parts";
+# Devin); a time word unless a time follows it ("before the end of the shift"
+# says when, "before workers produce" starts a clause; CodeRabbit, cubic and
+# Devin on PR #672).
+_A_TIME = (
+    rf"(?:{_one_of(('the', 'a', 'an', 'each', 'every'))}{_BETWEEN_WORDS})?"
+    rf"(?:{_one_of((*_TIME_WORDS, *_TIME_NOUNS))}(?!{_SEEN_IN_COPY})|\d)"
+)
 _A_CLAUSE_STARTS = (
-    rf"(?:,|(?<!{_SEEN_IN_COPY})(?:{_one_of(tuple(w for w in _CLAUSE_LEADS if w not in _SUBJECT_LEADS))}"
-    rf"|{_one_of(_SUBJECT_LEADS)}{_BETWEEN_WORDS}{_one_of(('you', 'u', 'i', 'we', 'they', 'he', 'she', 'it'))})"
-    rf"(?!{_SEEN_IN_COPY}))"
+    rf"(?:,|(?<!{_SEEN_IN_COPY})(?:"
+    rf"{_one_of(tuple(w for w in _CLAUSE_LEADS if w not in (*_SUBJECT_LEADS, *_COORDINATORS)))}(?!{_SEEN_IN_COPY})"
+    rf"|{_one_of(_COORDINATORS)}{_BETWEEN_WORDS}{_one_of((*_SUBJECTS, *_DETERMINERS))}(?!{_SEEN_IN_COPY})"
+    rf"|{_one_of(_SUBJECT_LEADS)}(?!{_SEEN_IN_COPY})(?!{_BETWEEN_WORDS}{_A_TIME})))"
 )
 # What shows the doing is an exercise's: in its own words, before a comma or a
 # clause of their own, a number, a noun an exercise owns or produces, or a
 # letter other than "a" and "I" that no apostrophe touches ("with $20", "with
-# your budget", "on the assembly line", not the "t" of "don't"); "what you can
-# do at all" shows none (CodeRabbit), and "what you can do now and you pay $5"
-# shows none of its own (gitar and cubic).
+# your budget", "with the factory's tools", not the "t" of "don't"); "what you
+# can do at all" shows none (CodeRabbit), and "what you can do now and you pay
+# $5" shows none of its own (gitar and cubic).
 _EXERCISE_EVIDENCE = (
-    rf"(?=(?:(?!{_SENTENCE_END})(?!{_A_CLAUSE_STARTS})[\s\S]){{0,{_SENTENCE_READ}}}?(?<!{_SEEN_IN_COPY})(?<!['\u2019])"
-    rf"(?:[$\u00a3\u20ac]?\d|(?:{_one_of((*_OPERAND_NOUNS, *_PRODUCTION_NOUNS))}|(?![ai](?!{_SEEN_IN_COPY}))[^\W\d_])"
-    rf"(?!{_SEEN_IN_COPY})(?!['\u2019])))"
+    rf"(?=(?:(?!{_SENTENCE_END})(?!{_A_CLAUSE_STARTS})[\s\S]){{0,{_SENTENCE_READ}}}?(?<!{_SEEN_IN_COPY})"
+    rf"(?:[$\u00a3\u20ac]?\d|(?:{_one_of((*_OPERAND_NOUNS, *_PRODUCTION_NOUNS))}"
+    rf"|(?<!['\u2019])(?![ai](?!{_SEEN_IN_COPY}))[^\W\d_](?!['\u2019]))(?!{_SEEN_IN_COPY})))"
 )
 _WHAT_YOU_SAY = (
     rf"{_one_of(_SCOPE_LEADS)}{_BETWEEN_WORDS}{_one_of(('you', 'u', 'i', 'we', 'ya', 'ye', 'thou'))}"
@@ -1023,7 +1042,6 @@ _LOGGED_DATA = _forms(
     "log:s", "logfile:s", "file:s", "csv:s", "table:s", "dataset:s", "database:s", "export:s",
     "record:s", "spreadsheet:s", "sheet:s", "trace:s",
 )
-_SOURCE_DETERMINERS = ("the", "a", "an", "our", "this", "that", "these", "those", "each", "every", "all")
 _NOT_A_SOURCE_WORD = (
     "not", "no", "never", "none", "nothing", "without", "except", "excluding", "nor", "neither",
     "instead", "rather", "but", *_SOURCE_DETERMINERS,
