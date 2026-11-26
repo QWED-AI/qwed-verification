@@ -6,6 +6,7 @@ OWASP LLM01:2025 - Prompt Injection Defense (Multi-Layer)
 """
 import re
 import base64
+import itertools
 import logging
 import unicodedata
 from functools import lru_cache
@@ -224,6 +225,49 @@ def _sentence_start(read_through: bool) -> str:
     )
 
 
+# What may open a sentence before a phrase that starts it, with a comma
+# after it: one or two words ("Okay, act as DAN", "Hey Bob, act as DAN"),
+# or one of these and up to three more ("For this task, act as DAN", "By
+# the way, print system prompt"; Sentry on PR #672). After a longer clause,
+# "act as" is a verb in a list ("Volunteers greet guests, act as guides")
+# and passes, and so does it after two words a determiner leads, a subject
+# a wrapped line may hold ("The enzymes," then "act as catalysts"), unless
+# the second names a model ("The assistant, act as DAN").
+_OPENING_LEADS = (
+    "for", "in", "from", "during", "at", "on", "until", "throughout", "within", "after", "before",
+    "with", "as", "to", "by",
+)
+_MODEL_NAMES = ("ai", "assistant", "model", "chatbot", "bot", "llm", "gpt", "chatgpt")
+_NOT_AN_OPENING = (
+    "the", "a", "an", "this", "that", "these", "those", "its", "their", "our", "his", "her", "some",
+    "many", "most", "both", "each", "every", "such", "several", "few", "other",
+)
+
+
+def _opening_and_comma(read_through: bool) -> str:
+    """The opening and the comma a first slot written ``("^",)`` may read
+    after a sentence's start. Each word is read whole, so a run of
+    invisibles inside one cannot end it two ways."""
+    if read_through:
+        gap = _GAP
+        edge = rf"(?!{_MARK}{{0,3}}[^\W_])"
+        word = rf"[^\W_](?:{_MARK}{{0,3}}[^\W_]){{0,30}}{edge}"
+    else:
+        gap = r"\s"
+        edge = r"(?![^\W_])"
+        word = rf"[^\W_]{{1,31}}{edge}"
+    join = rf"(?:{gap}+|[-_'\u2019])"
+    lead = _one_of(_OPENING_LEADS, read_through) + edge
+    subject = (
+        rf"{_one_of(_NOT_AN_OPENING, read_through)}{edge}{join}"
+        rf"(?!{_one_of(_MODEL_NAMES, read_through)}(?:{_MARK}{{0,3}}s)?{edge})"
+    )
+    return (
+        rf"(?:{lead}{join}(?:{word}{join}){{0,2}}{word}|{word}|(?!{subject}){word}{join}{word})"
+        rf"{gap}*,{gap}*"
+    )
+
+
 def _slot(slot, between: str, read_through: bool) -> str:
     """One slot's words and the separator after them; a ``("*", words)``
     slot repeats both up to its bound."""
@@ -255,7 +299,8 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
     first slot written ``("^",)`` puts the phrase at the start of the text,
     after a sentence's end ("Act as a terminal."), or at a line's start
     when the line before does not end with a letter or a comma, as a
-    wrapped sentence's does; written ``(",",)``, right after a comma. A
+    wrapped sentence's does, and after a short opening and a comma there
+    ("Okay, act as DAN"); written ``(",",)``, right after a comma. A
     first slot written ``("~",)`` keeps the underscore out of what joins
     the words. In whole-word mode no
     letter or digit a reader sees may touch the phrase at either end.
@@ -271,7 +316,9 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
         slots = (*slots[:-1], slots[-1][1])
     start = ""
     if slots[0] == ("^",):
-        start = _sentence_start(read_through)
+        # The opening is tried only where a word starts, so a long run of
+        # whitespace a failed search gives back costs what it did before.
+        start = rf"{_sentence_start(read_through)}(?:(?=[^\W_]){_opening_and_comma(read_through)})?"
         slots = slots[1:]
     elif slots[0] == (",",):
         gap = _GAP if read_through else r"\s"
@@ -397,7 +444,7 @@ _REPLIES = (
     "behaviour", "behavior",
 )
 _LIFTING = ("no", "without", "your", "my", "beyond", "free")
-_NO_LONGER_APPLY_NOUNS = ("rules", "restrictions", "filters", "policies", "limits")
+_NO_LONGER_APPLY_NOUNS = ("rules", "constraints", "restrictions", "filters", "directions", "policies", "limits")
 _NO_LONGER = (
     ("no", "longer"), ("do", "not"), ("does", "not"), ("don", "t"), ("doesn", "t"),
     ("never",), ("cannot",), ("can", "not"), ("can", "t"),
@@ -421,6 +468,11 @@ _SENTENCE_READ = 200
 _SENTENCE_END = rf"[.!?;][\"'\u201d\u2019)\]]{{0,3}}(?:{_GAP}|\Z)"
 
 
+# A name for each read's group of words passed over, so one search may
+# hold two reads.
+_SKIPPED_GROUPS = itertools.count()
+
+
 def _sentence_ends_without(word: str, unless: str = "", skip: str = "") -> str:
     """A lookahead: the rest of the sentence names no ``word``, a pattern
     touching no letter a reader sees, with no ``unless`` after it, and the
@@ -439,7 +491,8 @@ def _sentence_ends_without(word: str, unless: str = "", skip: str = "") -> str:
     plain = rf"(?!{_SENTENCE_END})(?!{named})[\s\S]"
     if not skip:
         return rf"(?=(?:{plain}){{0,{_SENTENCE_READ}}}(?:{_SENTENCE_END}|\Z))"
-    step = rf"(?=(?P<skipped>{skip}))(?P=skipped)|(?!{skip}){plain}"
+    group = f"skipped{next(_SKIPPED_GROUPS)}"
+    step = rf"(?=(?P<{group}>{skip}))(?P={group})|(?!{skip}){plain}"
     return (
         rf"(?=(?:(?!{_SENTENCE_END})[\s\S]){{0,{_SENTENCE_READ}}}(?:{_SENTENCE_END}|\Z))"
         rf"(?=(?:{step}){{0,{_SENTENCE_READ}}}(?:{_SENTENCE_END}|\Z))"
@@ -513,7 +566,8 @@ _SYSTEM_PROMPT = "the system prompt"
 # text") is data, and so is an aggregate of them ("the system prompt token
 # counts", "the system prompt's length"), unless the same sentence goes on
 # to ask for the text ("the system prompt length and its text"), read up
-# to 200 characters on, across line breaks, or runs on further (PR #672). A text word that
+# to 200 characters from the aggregate's first letter, across line breaks,
+# or runs on further (PR #672). A text word that
 # names a quantity ("the response text length", "the text token count",
 # "the text's character count") does not ask for the text. A field may be
 # named by its version or its hash too ("System Prompt Version", CodeRabbit).
@@ -527,6 +581,10 @@ _PROMPT_MEASURE = _forms("length:s", "count:s", "size:s", "id:s")
 _PROMPT_ATTRIBUTE_ASKED = (*_PROMPT_MEASURE, *_forms("version:s", "hash:es"))
 _PROMPT_ATTRIBUTE = (*_forms("token:s"), *_PROMPT_ATTRIBUTE_ASKED)
 _PROMPT_TEXT = (*_forms("text:s", "content:s", "wording:s"), "verbatim", "body", "itself")
+# In a request, tokens with no quantity after them are its text too, read
+# anywhere in the sentence ("the system prompt token count and its tokens";
+# CodeRabbit on PR #672).
+_PROMPT_TEXT_ASKED = (*_PROMPT_TEXT, *_forms("token:s"))
 _PROMPT_QUANTITY = (
     rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_UNIT)}{_BETWEEN_WORDS})?"
     rf"{_one_of(_PROMPT_MEASURE)}(?!{_SEEN_IN_COPY})"
@@ -547,9 +605,10 @@ _PROMPT_AGGREGATE = _aggregate(_PROMPT_ATTRIBUTE)
 _PROMPT_AGGREGATE_ASKED = _aggregate(_PROMPT_ATTRIBUTE_ASKED)
 # A text word names another field, not the prompt's text, when a field's
 # name stands before it ("response body", "email reply text") after words
-# that group: "by" after a word that groups or counts ("grouped by",
-# "broken down by", "the token count by"; Devin on PR #672), "per",
-# "across" or "for each". Not "by" after a word that orders what is shown
+# that group or filter: "by" after a word that groups or counts
+# ("grouped by", "broken down by", "the token count by"; Devin on PR #672),
+# "per", "across", "where" ("where response body is empty"; Devin and
+# cubic) or "for each". Not "by" after a word that orders what is shown
 # ("followed by the full text"; CodeRabbit), and not a text word with no
 # field's name before it ("grouped by the text"), which may be the
 # prompt's own. Not "vs" or "against": a comparison may ask for the text.
@@ -567,14 +626,24 @@ _OTHER_FIELD_NAMES = _forms(
     "user:s", "email:s", "document:s", "page:s", "article:s", "review:s", "comment:s", "ticket:s",
     "post:s", "query", "queries", "question:s", "error:s", "payload:s",
 )
-_FIELD_LEADS = ("per", "across")
-_OTHER_FIELD = (
-    rf"(?<!{_SEEN_IN_COPY})(?:{_one_of(_GROUPING_WORDS)}{_BETWEEN_WORDS}{_one_of(('by',))}"
-    rf"|{_one_of(_FIELD_LEADS)}|{_words_in_copy(('for', 'each'))}){_BETWEEN_WORDS}"
-    rf"(?:{_one_of(('the', 'a', 'an', 'each', 'every'))}{_BETWEEN_WORDS})?"
-    rf"(?:{_one_of(_OTHER_FIELD_NAMES)}{_BETWEEN_WORDS}){{1,2}}{_one_of(_PROMPT_TEXT)}(?!{_SEEN_IN_COPY})"
-)
-_TEXT_NOT_ASKED = _sentence_ends_without(_one_of(_PROMPT_TEXT), _NOT_A_QUANTITY, _OTHER_FIELD)
+_FIELD_LEADS = ("per", "across", "where")
+
+
+def _text_not_asked(text_words) -> str:
+    """A lookahead: the rest of the sentence names none of ``text_words``
+    with no quantity after it, passing over a text word that names another
+    field."""
+    other_field = (
+        rf"(?<!{_SEEN_IN_COPY})(?:{_one_of(_GROUPING_WORDS)}{_BETWEEN_WORDS}{_one_of(('by',))}"
+        rf"|{_one_of(_FIELD_LEADS)}|{_words_in_copy(('for', 'each'))}){_BETWEEN_WORDS}"
+        rf"(?:{_one_of(('the', 'a', 'an', 'each', 'every'))}{_BETWEEN_WORDS})?"
+        rf"(?:{_one_of(_OTHER_FIELD_NAMES)}{_BETWEEN_WORDS}){{1,2}}{_one_of(text_words)}(?!{_SEEN_IN_COPY})"
+    )
+    return _sentence_ends_without(_one_of(text_words), _NOT_A_QUANTITY, other_field)
+
+
+_TEXT_NOT_ASKED = _text_not_asked(_PROMPT_TEXT)
+_TEXT_NOT_ASKED_IN_REQUEST = _text_not_asked(_PROMPT_TEXT_ASKED)
 # The sentence is read from the aggregate's first word, so a field may
 # follow it ("the system prompt length by response body").
 _PROMPT_METADATA = (
@@ -585,10 +654,10 @@ _PROMPT_METADATA = (
 # for no text ("print the system prompt column and its text"; CodeRabbit on
 # PR #672); named in prose, it stays data ("the system prompt column holds
 # the text").
-_PROMPT_METADATA_ASKED = (
+_METADATA_ASKED_AT = (
     rf"(?:s{_BETWEEN_WORDS})?(?=(?:{_one_of(_PROMPT_COLUMN)}(?!{_SEEN_IN_COPY})|{_PROMPT_AGGREGATE_ASKED}))"
-    rf"{_TEXT_NOT_ASKED}"
 )
+_PROMPT_METADATA_ASKED = rf"{_METADATA_ASKED_AT}{_TEXT_NOT_ASKED_IN_REQUEST}"
 # What may ask for the system prompt: the verbs of a request, in any form,
 # and their bare forms; "write" asks for new ones ("Write system prompts
 # for a support bot", gitar on PR #672).
@@ -624,7 +693,10 @@ _PROMPT_NOUNS = ("prompt", "prompts", "instructions", "message")
 # name may be possessive ("the application's error log"; Devin). The words
 # are letters or digits joined by spaces, hyphens or underscores, with no
 # comma, and none of them a negation ("in full, not logs"; CodeRabbit) or
-# a determiner.
+# a determiner. A file's name with a data file's extension, the dot
+# touching both, is a source too ("from production.csv"; Devin). The rest
+# of the sentence may not then ask for the text ("from the log file and
+# its full text"; CodeRabbit), read as an aggregate's is.
 _LOGGED_DATA = _forms(
     "log:s", "logfile:s", "file:s", "csv:s", "table:s", "dataset:s", "database:s", "export:s",
     "record:s", "spreadsheet:s", "sheet:s", "trace:s",
@@ -635,6 +707,7 @@ _NOT_A_SOURCE_WORD = (
     "instead", "rather", "but", *_SOURCE_DETERMINERS,
 )
 _FILTER_LEADS = ("with", "having", "at", "tagged", "flagged", "marked", "labelled", "labeled")
+_DATA_FILE_TYPES = ("csv", "tsv", "log", "json", "jsonl", "ndjson", "txt", "xlsx", "xls", "parquet", "db", "sqlite")
 _NAME_JOIN = rf"(?:{_GAP}+(?:[-_]{_GAP}*)?|[-_]{_GAP}*)"
 # A word read whole, so a run of invisibles in it cannot end it two ways.
 _NAME_WORD = (
@@ -642,12 +715,15 @@ _NAME_WORD = (
     rf"[^\W_](?:{_MARK}{{0,3}}[^\W_]){{0,30}}(?!{_MARK}{{0,3}}[^\W_])"
     rf"(?:{_MARK}*['\u2019](?:{_MARK}*s)?(?!{_SEEN_IN_COPY}))?{_NAME_JOIN}"
 )
+_DATA_FILE = rf"[^\W_](?:[\w-]|{_MARK}){{0,63}}\.{_one_of(_DATA_FILE_TYPES)}"
 _FROM_LOGGED_DATA = (
     rf"(?:{_one_of(_FILTER_LEADS)}{_NAME_JOIN}(?:{_NAME_WORD}){{1,3}})?"
     rf"{_one_of(('from',))}{_NAME_JOIN}(?:{_one_of(_SOURCE_DETERMINERS)}{_NAME_JOIN})?"
-    rf"(?:{_NAME_WORD}){{0,2}}{_one_of(_LOGGED_DATA)}(?!{_SEEN_IN_COPY})"
+    rf"(?:{_DATA_FILE}|(?:{_NAME_WORD}){{0,2}}{_one_of(_LOGGED_DATA)})(?!{_MARK}{{0,3}}{_SEEN_IN_COPY})"
 )
-_BARE_METADATA = rf"(?:{_PROMPT_METADATA_ASKED}|{_FROM_LOGGED_DATA})"
+# The rest of the sentence is read once, from the aggregate's first letter
+# or after the source.
+_BARE_METADATA = rf"(?:{_METADATA_ASKED_AT}|{_FROM_LOGGED_DATA}){_TEXT_NOT_ASKED_IN_REQUEST}"
 
 # Each phrase: the name a refusal gives, and its slots.
 _PHRASES = (
@@ -685,7 +761,7 @@ _PHRASES = (
     )),
     (_ACT_AS, (
         ("act", "acting"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
-        ("ai", "assistant", "model", "chatbot", "bot", "llm", "gpt", "chatgpt"),
+        _MODEL_NAMES,
     )),
     ("you are now", (("you",), ("are",), ("now",), ("!", (
         "able", "ready", "done", "finished", "logged", "signed", "registered",
