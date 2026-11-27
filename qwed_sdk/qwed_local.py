@@ -1314,12 +1314,16 @@ Z3 code:"""
         """
         Verify if a file path is within allowed sandbox directories.
         
-        Uses deterministic path comparison (no LLM).
+        Uses deterministic path comparison (no LLM): links are followed and
+        the resolved path is compared with each allowed directory part by
+        part (see ``SystemGuard.verify_file_access``). When allowed, open
+        ``evidence["resolved_path"]``, not the path as given.
         
         Args:
             filepath: The file path to verify.
             operation: "read" or "write".
-            allowed_paths: Optional list of allowed directories.
+            allowed_paths: Optional list of allowed directories. None uses
+                the defaults; an empty list allows no directory.
         
         Returns:
             VerificationResult with verified=True if allowed.
