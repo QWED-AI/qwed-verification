@@ -13,7 +13,7 @@
   [![codecov](https://codecov.io/gh/QWED-AI/qwed-verification/branch/main/graph/badge.svg)](https://codecov.io/gh/QWED-AI/qwed-verification)
   [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
 
-  [Website](https://qwedai.tech) · [Documentation](https://docs.qwedai.tech) · [Install](#install) · [Engines](#engines-and-guards) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+  [Website](https://qwedai.tech) · [Documentation](https://docs.qwedai.tech) · [Install](#install) · [Engines](#engines-and-guards) · [Dashboard](#dashboard) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 </div>
 
 ---
@@ -80,8 +80,8 @@ Other languages and runtimes:
 
 | | Install | Notes |
 |---|---|---|
-| TypeScript | `npm install @qwed-ai/sdk` | Published on each release; pin a version, e.g. `@11.0.0` |
-| Go | `go get github.com/QWED-AI/qwed-verification/sdk-go/v11` | Released under `sdk-go/vX.Y.Z` tags; pin a version, e.g. `@v11.0.0`. From 11.0.0 the module path ends in `/v11` |
+| TypeScript | `npm install @qwed-ai/sdk` | Published on each release; pin a version, e.g. `@12.0.0` |
+| Go | `go get github.com/QWED-AI/qwed-verification/sdk-go/v12` | Released under `sdk-go/vX.Y.Z` tags; pin a version, e.g. `@v12.0.0`. From 12.0.0 the module path ends in `/v12` |
 | Rust | `cargo add qwed` | |
 | Docker | `docker pull qwedai/qwed-verification` | The API server on port 8000, from 8.0.0 (earlier tags ran the GitHub Action). It needs `QWED_CORS_ORIGINS`, `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET` and `QWED_AUDIT_SECRET_KEY`; set `QWED_SIGNING_KEY` (an EC P-256 key) too, or attestations stop verifying after a restart or on another replica. With Postgres, Redis and monitoring: `docker compose -f deploy/docker-compose.yml up -d` after filling in `deploy/.env` from `deploy/.env.example`. See [self-hosting](https://docs.qwedai.tech/advanced/self-hosting) |
 
@@ -152,6 +152,8 @@ guard.verify_file_access("~/.ssh/id_rsa")
 # {'verified': False, 'risk': 'FORBIDDEN_PATH', 'message': 'Access to path matching forbidden pattern is denied.'}
 ```
 
+`verify_file_access` allows a path only inside the allowed directories (`allowed_paths`), compared part by part, as written and after the links on the way are followed. Open the `resolved_path` of an allowed result, not the path as given.
+
 ### Engines, through the API
 
 Run the server (`pip install "qwed[server]"`, or the Docker image), then call it directly or through an SDK. Requests need an API key in the `x-api-key` header; `qwed init` creates one locally.
@@ -190,7 +192,7 @@ QWED has 13 engines and 9 policy guards. What an engine may claim depends on its
 | Engine | Uses | Checks |
 |---|---|---|
 | Math | SymPy | Arithmetic and algebraic identities |
-| Logic | Z3 | Satisfiability of constraints (QWED DSL) |
+| Logic | Z3 | A claim proved from premises (QWED DSL) |
 | SQL | SQLGlot | Query structure, destructive statements, injection patterns, schema |
 | Code | Python AST and lists | Python: admits only listed standard-library modules and module names, listed builtins and listed special attributes, with no attribute's value read by a name made at run time; other languages: dangerous calls and patterns |
 | Schema | JSON Schema | Structure of JSON output |
@@ -207,7 +209,7 @@ The Stats engine executes statistical code in a sandbox and returns `UNVERIFIABL
 ## GitHub Action
 
 ```yaml
-- uses: QWED-AI/qwed-verification@v11.0.0
+- uses: QWED-AI/qwed-verification@v12.0.0
   with:
     action: scan-secrets        # or scan-code, verify-shell
     paths: "**/*.py,**/*.env"
@@ -219,6 +221,14 @@ A passing scan means no known dangerous pattern was found, not that the code is 
 With `output_format: sarif` the action writes `qwed-results.sarif`; add [`github/codeql-action/upload-sarif`](https://github.com/github/codeql-action) to show the findings in the Security tab. The `verify` action calls a QWED API and needs `api_key` and a reachable server.
 
 [QWED Security](https://github.com/marketplace/qwed-security) is a separate GitHub App built on QWED that checks pull requests.
+
+## Dashboard
+
+[QWED Dashboard](https://github.com/QWED-AI/qwed-dashboard) is an open-source web app for your QWED server: sign-in, API keys, members, agents, an overview, the decision ledger, and each record with its attestation and audit chain checks. It shows what the server stored and never works out a verdict or an admission itself. It needs qwed-verification 9.0.0 or later, and signs in with the owner account that `qwed init` creates. Try it with sample data at [demo.qwedai.tech](https://demo.qwedai.tech); the sample data stays in your browser.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/QWED-AI/qwed-dashboard/v0.2.0/docs/media/qwed-dashboard-demo.gif" alt="QWED Dashboard with sample data: signing in, the Overview, the decision ledger, and a BLOCKED record with its checks" width="800">
+</p>
 
 ## Domain packages
 

@@ -5,7 +5,161 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
-### Changed
+## [12.0.0] - 2026-11-27
+
+A major release that fixes one advisory reported from outside the project.
+`SystemGuard.verify_file_access` allowed a path whose absolute form started
+with the characters of an allowed directory, and did not resolve links; it
+now decides a path part by part, reads the links on its way one by one, and
+refuses a link that leads outside before anything there is read.
+`/verify/consensus` never returns `VERIFIED`: its engines decide a model's
+translations, so it is advisory only. Each cause that stops a verification
+has one verdict on every route, named in `constraint_id`, and
+`QWED_PROVIDER_TIMEOUT` must be a finite number of seconds above zero, or
+the server does not start. The injection screen reads phrases as whole
+words, so it refuses fewer ordinary questions and more attacks; audit rows
+keep the model's translation; and `ConfigGuard` reports a password in a
+connection URL of any scheme. The Go module path ends in `/v12`. Read
+"Upgrading to 12.0.0" below before upgrading. The soundness eval has 163
+known-answer claims, 0 accepted wrongly.
+
+### Security fixes (advisories)
+
+One advisory, reported from outside the project and published on the
+repository Security tab. It affects versions up to 11.0.0; upgrading is
+recommended. Its regression tests are in
+`tests/test_system_guard_path_containment.py`.
+
+- **`SystemGuard.verify_file_access` decides a path part by part, after the
+  links on its way**
+  ([GHSA-wfx7-f63g-p968](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-wfx7-f63g-p968),
+  high). Reported by KulFilip. It allowed a path when its absolute form
+  started with the characters of an allowed directory, so
+  `/tmp-exfil/secret` passed the default `/tmp` and a sibling of the
+  working directory passed the default `.`; and it did not resolve links,
+  so a link inside an allowed directory could point anywhere.
+  `QWEDLocal.verify_file_access` calls it.
+  - A path is allowed only when it is an allowed directory or below one,
+    compared part by part: first as written, before the file system is
+    read, and then exactly, for the path resolved as the file system shows
+    it at the time of the call. An allowed result carries `resolved_path`:
+    open that, not the path as given.
+  - Before resolving, the links on the way are read one by one, and a link
+    that leads outside the allowed directories is `SANDBOX_ESCAPE` before
+    anything there is read; on Windows a link to a network share would
+    otherwise connect to its server. More than 40 links, a link or a part
+    that is there but cannot be read, and on Windows a link reached through
+    another link whose target climbs with `..` or names a drive or a root
+    alone, are `INVALID_PATH`.
+  - The forbidden patterns are also matched against the resolved path, so a
+    doubled separator or a link to `.env` no longer passes them, and a
+    `.ssh` folder is refused at any depth.
+  - Refused before anything is read: `~`, or a first part starting with `~`
+    followed by more parts; a NUL character; bytes; more than 4,096
+    characters or 256 parts; and on Windows, device and NT namespace forms,
+    alternate data streams, reserved device names and names that end with a
+    dot or a space.
+  - An allowed directory that is itself a link or a junction is not used,
+    nor one inside another listed directory with a link between them, and
+    the default `.` is not used while the working directory is the root of
+    a file system.
+
+### Other security changes
+
+- **The injection screen reads phrases as whole words (#646).** It refused
+  ordinary maths and English and missed simple rewordings: on 172249b7 the
+  maths check refused 11 of 1,319 GSM8K questions and 383 of 11,864 SQuAD
+  questions, mostly on keywords found inside other words ("mode" in
+  "model", "sudo" in "sudoku"), and "Ignore all prior instructions" passed
+  the stats and fact check.
+  - A phrase is a sequence of words: an instruction verb, up to four
+    qualifiers and what it names ("ignore all the prior instructions"), or
+    a fixed phrase such as "developer mode". Its words may be joined by
+    whitespace, invisible characters, a dash, an underscore, a comma, an
+    apostrophe as in "let's", or a dot with no space after it, and Cyrillic
+    and Greek look-alike letters are read as Latin. Orders, messages, text and similar nouns also name
+    data, so they count as what an override names only after a qualifier
+    such as "previous" or "your": "Drop the orders under $20" passes.
+  - The maths check refuses only jailbreak, sudo and role play as words of
+    their own, and a Greek letter beside Latin is maths unless it sits
+    inside a Latin word. Its 2,000-character bound is the phrase check's
+    10,000. The policy check and the maths check read whole words, as the
+    stats and fact check does.
+  - None of those GSM8K questions, SQuAD questions or 1,204 SQuAD
+    paragraphs is refused now, and the stats and fact check refuses 70 of
+    160 English attacks from the deepset prompt-injections set (42 before).
+
+- **`ConfigGuard` reports a password in a connection URL of any scheme
+  (#658).** Its `DATABASE_URL` pattern named `postgres`, `mysql` and
+  `mongodb`, so a password under `postgresql`, `postgresql+psycopg2`,
+  `mongodb+srv`, `redis` with only a password, `amqp` or any other scheme
+  passed `scan_string`, `verify_config_safety` and the Action's
+  `scan-secrets`.
+  - It now reads the user and password after any `://` as one token, and
+    reads the three schemes it named with the reach they had, so nothing it
+    reported before is lost, except a password that holds the scheme and
+    `://` of the next `postgres`, `mysql` or `mongodb` URL, where the search
+    stops to stay linear.
+  - Read out: a port before a path, query or fragment; a Docker or OCI image
+    pinned by a digest of its algorithm's exact length that holds a letter
+    `a`-`f` (a digest of digits alone can read as a host and a zero-padded
+    port), also as an item of a YAML flow collection; and a password that is
+    exactly `${NAME}` or `<name>` in ASCII. `${NAME:-default}`, `$NAME` and a
+    run of `*` stay reported.
+  - A digest or a placeholder is read out only when no other `@` follows it
+    before the next whitespace, as a quote does not prove the value ended.
+    So compact JSON with a later `@`, such as a pinned image or a placeholder
+    URL beside an email address, is reported by `scan_string` and the
+    Action's `scan-secrets`, which read JSON as text; `verify_config_safety`
+    reads each parsed value alone and passes it.
+  - The CI and Docker workflows read the database password from a
+    variable, so the dogfood `scan-secrets` job still finds nothing.
+
+### Upgrading to 12.0.0
+
+These changes can break existing callers. Each is described in full in its
+entry above or below.
+
+- **Consensus never verifies** (#633). `/verify/consensus` returns
+  `UNVERIFIABLE` or `BLOCKED` in every mode, with `advisory_only: true`,
+  `proof_ref: null` and no attestation, and the Python SDK's
+  `verify_consensus` reports `is_verified` false, even from an older
+  server. Callers that gated execution on a `VERIFIED` consensus must stop
+  and treat its result as a signal for review. In `maximum` mode two
+  verdicts move; see the entry below.
+- **One verdict for each cause** (#519). With no model configured, or a
+  provider QWED does not know, `/verify/logic`, `/verify/consensus`,
+  `/verify/stats` and `/verify/fact` (with a provider named) are
+  `UNVERIFIABLE` with `translation.no_provider`, where they were
+  `BLOCKED`. A refused question gets a fixed message, and the screen's
+  reason stays in the server log. Read the cause from `constraint_id`, not
+  from the status or the message.
+- **`QWED_PROVIDER_TIMEOUT`** must be a finite number of seconds above
+  zero, or the server does not start. Before, zero or less ended every
+  provider call at once, and infinity bounded none.
+- **`SystemGuard`** (GHSA-wfx7-f63g-p968).
+  - `allowed_paths=[]` allows no path; it meant the defaults.
+    `allowed_paths` must be a list of strings or path objects: a single
+    string raises `TypeError`, and an entry that is not a path, or holds
+    NUL, raises `TypeError` or `ValueError` when the guard is made.
+  - On macOS `/tmp` is a link to `/private/tmp`, so the default `/tmp` is
+    not used there; name `/private/tmp`. The same holds for any allowed
+    directory that is a link or a junction.
+  - On Windows, `con.py`, `aux.c` and `nul.txt` are refused, and names with
+    `?`, `*`, `<`, `>`, `|` or `"`, or a part longer than 255 characters,
+    are `INVALID_PATH`. On Linux a part longer than 255 bytes, or a path of
+    4,096 characters, is `INVALID_PATH`. No such file can be opened.
+  - `verify_shell_command` reads the forbidden patterns too, so a command
+    with a path through a `.ssh` folder (`cat "$HOME/.ssh/config"`) is now
+    `PATH_VIOLATION`, in the SDK and in the Action's shell scan.
+  - Open the `resolved_path` of an allowed result, not the path as given.
+- **sqlglot 28.0.0 or later** is required; `pip install qwed` asks for it.
+- **Go.** The module path ends in `/v12`:
+  `go get github.com/QWED-AI/qwed-verification/sdk-go/v12`.
+
+### Other changes since 11.0.0
+
+#### Changed
 
 - **`/verify/consensus` is advisory only (#633).** Each engine decides a
   model's translation of the query or, for Stats, computes a value from the
@@ -86,30 +240,7 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   `sqlglot>=28.0.0`; the server image and `requirements.txt` already pin
   30.25.0.
 
-### Fixed
-
-- **The injection screen reads phrases as whole words (#646).** It refused
-  ordinary maths and English and missed simple rewordings: on 172249b7 the
-  maths check refused 11 of 1,319 GSM8K questions and 383 of 11,864 SQuAD
-  questions, mostly on keywords found inside other words ("mode" in
-  "model", "sudo" in "sudoku"), and "Ignore all prior instructions" passed
-  the stats and fact check.
-  - A phrase is a sequence of words: an instruction verb, up to four
-    qualifiers and what it names ("ignore all the prior instructions"), or
-    a fixed phrase such as "developer mode". Its words may be joined by
-    whitespace, invisible characters, a dash, an underscore, a comma, an
-    apostrophe as in "let's", or a dot with no space after it, and Cyrillic
-    and Greek look-alike letters are read as Latin. Orders, messages, text and similar nouns also name
-    data, so they count as what an override names only after a qualifier
-    such as "previous" or "your": "Drop the orders under $20" passes.
-  - The maths check refuses only jailbreak, sudo and role play as words of
-    their own, and a Greek letter beside Latin is maths unless it sits
-    inside a Latin word. Its 2,000-character bound is the phrase check's
-    10,000. The policy check and the maths check read whole words, as the
-    stats and fact check does.
-  - None of those GSM8K questions, SQuAD questions or 1,204 SQuAD
-    paragraphs is refused now, and the stats and fact check refuses 70 of
-    160 English attacks from the deepset prompt-injections set (42 before).
+#### Fixed
 
 - **The Z3 engine in `maximum` consensus runs (#659).** It failed on every
   query and was recorded as `BLOCKED`. It now proves the translated claim
@@ -138,32 +269,6 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     Logic is the contradiction and the two proofs, and `qwed test` still
     runs twelve checks. The README sample is the new output, and a test
     keeps the two the same.
-
-- **`ConfigGuard` reports a password in a connection URL of any scheme
-  (#658).** Its `DATABASE_URL` pattern named `postgres`, `mysql` and
-  `mongodb`, so a password under `postgresql`, `postgresql+psycopg2`,
-  `mongodb+srv`, `redis` with only a password, `amqp` or any other scheme
-  passed `scan_string`, `verify_config_safety` and the Action's
-  `scan-secrets`.
-  - It now reads the user and password after any `://` as one token, and
-    reads the three schemes it named with the reach they had, so nothing it
-    reported before is lost, except a password that holds the scheme and
-    `://` of the next `postgres`, `mysql` or `mongodb` URL, where the search
-    stops to stay linear.
-  - Read out: a port before a path, query or fragment; a Docker or OCI image
-    pinned by a digest of its algorithm's exact length that holds a letter
-    `a`-`f` (a digest of digits alone can read as a host and a zero-padded
-    port), also as an item of a YAML flow collection; and a password that is
-    exactly `${NAME}` or `<name>` in ASCII. `${NAME:-default}`, `$NAME` and a
-    run of `*` stay reported.
-  - A digest or a placeholder is read out only when no other `@` follows it
-    before the next whitespace, as a quote does not prove the value ended.
-    So compact JSON with a later `@`, such as a pinned image or a placeholder
-    URL beside an email address, is reported by `scan_string` and the
-    Action's `scan-secrets`, which read JSON as text; `verify_config_safety`
-    reads each parsed value alone and passes it.
-  - The CI and Docker workflows read the database password from a
-    variable, so the dogfood `scan-secrets` job still finds nothing.
 
 - **Audit rows keep the model's translation (#578).** `raw_llm_output` was
   never set, so the row of a route that asks a model to translate kept no
