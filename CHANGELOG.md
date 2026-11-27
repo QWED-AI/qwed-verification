@@ -5,7 +5,7 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
-## [12.0.0] - 2026-11-27
+## [12.0.0] - 2026-11-28
 
 A major release that fixes one advisory reported from outside the project.
 `SystemGuard.verify_file_access` allowed a path whose absolute form started
