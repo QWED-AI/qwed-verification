@@ -257,7 +257,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     # Scoped to this job only (the global default stays contents: read): the Go
-    # module lives in sdk-go/ with path .../sdk-go/v11, so the proxy resolves it
+    # module lives in sdk-go/ with path .../sdk-go/v12, so the proxy resolves it
     # from a tag named sdk-go/vX.Y.Z — which this job has to push (#443).
     permissions:
       contents: write

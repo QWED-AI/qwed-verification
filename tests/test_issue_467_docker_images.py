@@ -281,7 +281,7 @@ def test_kubernetes_pins_the_first_server_image():
     deployment = yaml.safe_load((ROOT / "deploy" / "kubernetes" / "deployment.yaml").read_text(encoding="utf-8"))
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
 
-    assert image == "docker.io/qwedai/qwed-verification:11.0.0"
+    assert image == "docker.io/qwedai/qwed-verification:12.0.0"
 
 
 def test_the_kubernetes_secret_has_every_server_secret():
