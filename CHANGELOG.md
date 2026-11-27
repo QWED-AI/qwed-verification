@@ -11,7 +11,9 @@ A major release that fixes one advisory reported from outside the project.
 `SystemGuard.verify_file_access` allowed a path whose absolute form started
 with the characters of an allowed directory, and did not resolve links; it
 now decides a path part by part, reads the links on its way one by one, and
-refuses a link that leads outside before anything there is read.
+refuses a link that leads outside before anything there is read. `/tmp`
+is no longer a default allowed directory, and a default directory every
+user can write to is not used.
 `/verify/consensus` never returns `VERIFIED`: each engine decides a model's
 translation of the query or, for Stats, computes a value from its numbers,
 so it is advisory only. Each cause that stops a verification
@@ -67,6 +69,15 @@ recommended. Its regression tests are in
     a file system.
 
 ### Other security changes
+
+- **`SystemGuard` no longer allows `/tmp` by default** (#677). Its
+  default allowed directories were `/tmp`, `./workspace` and `.`, and
+  every user of the machine can write to `/tmp`, so a file someone else
+  made there passed. The defaults are now `./workspace` and `.`, and
+  neither is used while every user can write to it, as to a working
+  directory in `/tmp`. That is not checked on Windows, where the mode bits
+  do not say who may write. A directory the caller names, `/tmp` included,
+  still counts.
 
 - **The injection screen reads phrases as whole words (#646).** It refused
   ordinary maths and English and missed simple rewordings: on 172249b7 the
@@ -146,9 +157,11 @@ entry above or below.
     `allowed_paths` must be a list of strings or path objects: a single
     string raises `TypeError`, and an entry that is not a path, or holds
     NUL, raises `TypeError` or `ValueError` when the guard is made.
-  - On macOS `/tmp` is a link to `/private/tmp`, so the default `/tmp` is
-    not used there; name `/private/tmp`. The same holds for any allowed
-    directory that is a link or a junction.
+  - `/tmp` is no longer a default, and a default directory every user can
+    write to is not used: name the directory in `allowed_paths` to allow
+    it. On macOS `/tmp` is a link to `/private/tmp`, and an allowed
+    directory that is a link or a junction is not used; name
+    `/private/tmp`.
   - On Windows, `con.py`, `aux.c` and `nul.txt` are refused, and names with
     `?`, `*`, `<`, `>`, `|` or `"`, or a part longer than 255 characters,
     are `INVALID_PATH`. On Linux a part longer than 255 bytes, or a path of

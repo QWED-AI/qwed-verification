@@ -272,6 +272,22 @@ def _is_windows_special(path: str) -> bool:
     )
 
 
+def _writable_by_all(path: str) -> bool:
+    """
+    Every user can write to ``path``, as to /tmp, so what is in it may be
+    anyone's. False on Windows, where the mode bits do not say who may
+    write, and when nothing is there. True when it cannot be read.
+    """
+    if _ON_WINDOWS:
+        return False
+    try:
+        return bool(os.stat(path).st_mode & stat.S_IWOTH)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+
+
 def _starts_at_home(path: str) -> bool:
     """
     "~", or a first part that starts with "~" followed by more parts: a shell
@@ -314,8 +330,10 @@ class SystemGuard:
         r"\.pem$",                      # SSL certificates
     ]
 
-    # Directories a file path may be in when the caller names none
-    DEFAULT_ALLOWED_PATHS = ["/tmp", "./workspace", "."]
+    # Directories a file path may be in when the caller names none. Not
+    # /tmp: every user of the machine can write there, so a file in it may
+    # be someone else's.
+    DEFAULT_ALLOWED_PATHS = ["./workspace", "."]
     
     def __init__(
         self,
@@ -458,8 +476,12 @@ class SystemGuard:
         is one inside another allowed directory with a link between them.
         Links in the parents of an allowed directory, outside every allowed
         directory, are followed: they are the caller's own setup.
-        When the caller names no allowed directories, the default "." is
-        not used while the working directory is the root of a file system.
+        When the caller names no allowed directories, the defaults are
+        "./workspace" and ".". The default "." is not used while the working
+        directory is the root of a file system, and neither default is used
+        while every user can write to it (the working directory in /tmp,
+        say). That is not checked on Windows, where the mode bits do not
+        say who may write. Name a shared directory to allow it.
 
         The answer holds for the file system at the time of the call. A link
         changed after the check can point elsewhere, and a hard link is the
@@ -553,7 +575,8 @@ class SystemGuard:
         A directory whose last part is a link or a junction is not used:
         whoever can replace the link decides where it points. Nor is one
         inside another allowed directory with a link between the two, since
-        whoever can write the outer directory can make that link.
+        whoever can write the outer directory can make that link. A default
+        directory every user can write to is not used either.
         """
         entries = []
         for allowed_dir in self.allowed_paths:
@@ -572,6 +595,7 @@ class SystemGuard:
             for written, resolved, in_place in entries
             if in_place
             and not self._default_at_filesystem_root(written, resolved)
+            and not (self._default_allowed_paths and _writable_by_all(resolved))
             and self._nested_in_place(written, resolved, entries)
         ]
 

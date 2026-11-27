@@ -106,8 +106,14 @@ def test_a_sibling_of_a_relative_allowed_directory_is_outside(tmp_path, monkeypa
     assert result["risk"] == "SANDBOX_ESCAPE"
 
 
-@pytest.mark.parametrize("path", ["/tmp-exfil/secret", "/tmpXYZ/anything", "/tmp" + ZERO_WIDTH_SPACE + "/x"])
-def test_the_default_tmp_does_not_admit_its_siblings(tmp_path, monkeypatch, path):
+@pytest.mark.parametrize("path", [
+    "/tmp/report.txt", "/tmp", "/tmp/", "//tmp/report.txt", "/tmp/./report.txt", "/TMP/report.txt",
+    "/var/tmp/report.txt", "/dev/shm/report.txt",
+    "/tmp-exfil/secret", "/tmpXYZ/anything", "/tmp" + ZERO_WIDTH_SPACE + "/x",
+])
+def test_the_defaults_do_not_allow_tmp(tmp_path, monkeypatch, path):
+    # Every user of the machine can write to /tmp, so a file there may be
+    # someone else's: it is not a default.
     monkeypatch.chdir(tmp_path)
 
     result = SystemGuard().verify_file_access(path)
@@ -117,8 +123,7 @@ def test_the_default_tmp_does_not_admit_its_siblings(tmp_path, monkeypatch, path
 
 
 def test_a_sibling_of_the_working_directory_is_outside_dot(tmp_path, monkeypatch):
-    # "." as in the defaults; named here because on Linux tmp_path is inside
-    # the default "/tmp", which rightly allows the sibling.
+    # "." as in the defaults, named so that the test does not depend on them.
     project = tmp_path / "proj"
     project.mkdir()
     secrets = tmp_path / "proj-secrets"
@@ -1232,11 +1237,65 @@ def test_paths_inside_are_allowed(tmp_path, monkeypatch, workspace):
         assert result["verified"] is True, path
 
 
-@pytest.mark.skipif(os.path.islink("/tmp"), reason="/tmp is a link here (macOS): a linked directory is not used")
-def test_the_default_tmp_still_allows_its_own_files(tmp_path, monkeypatch):
+@pytest.mark.skipif(os.name == "nt" or os.path.islink("/tmp"),
+                    reason="no /tmp on Windows; /tmp is a link here (macOS): a linked directory is not used")
+def test_a_named_tmp_still_allows_its_own_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    assert SystemGuard().verify_file_access("/tmp/report.txt")["verified"] is True
+    assert SystemGuard(allowed_paths=["/tmp"]).verify_file_access("/tmp/report.txt")["verified"] is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
+def test_a_default_directory_every_user_can_write_is_not_used(tmp_path, monkeypatch):
+    # The working directory in a shared directory, as /tmp is: the default
+    # "." would allow it, so it is not used. A caller who names it decides.
+    shared = tmp_path / "shared"
+    workspace = shared / "workspace"
+    workspace.mkdir(parents=True)
+    shared.chmod(0o1777)
+    workspace.chmod(0o755)
+    monkeypatch.chdir(shared)
+    by_default = SystemGuard()
+
+    assert by_default.verify_file_access("report.txt")["risk"] == "SANDBOX_ESCAPE"
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("report.txt")["verified"] is True
+    # Its own workspace, which only its owner can write, is still a default.
+    assert by_default.verify_file_access("workspace/report.txt")["verified"] is True
+
+    workspace.chmod(0o777)
+
+    assert by_default.verify_file_access("workspace/report.txt")["risk"] == "SANDBOX_ESCAPE"
+
+
+def test_writable_by_all_reads_the_mode_bits(tmp_path, monkeypatch):
+    directory = str(tmp_path / "d")
+    modes = {}
+    real_stat = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if os.fspath(path) == directory:
+            mode = modes["mode"]
+            if isinstance(mode, Exception):
+                raise mode
+            return SimpleNamespace(st_mode=stat.S_IFDIR | mode)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", False)
+    monkeypatch.setattr(os, "stat", fake_stat)
+    for mode, expected in [(0o755, False), (0o775, False), (0o777, True), (0o1777, True), (0o703, True),
+                           (FileNotFoundError(2, "missing"), False), (NotADirectoryError(20, "not a dir"), False),
+                           (PermissionError(13, "denied"), True)]:
+        modes["mode"] = mode
+        assert system_guard._writable_by_all(directory) is expected, mode
+
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", True)
+    modes["mode"] = 0o777
+    assert system_guard._writable_by_all(directory) is False
+
+
+def test_the_defaults_are_workspace_and_the_working_directory():
+    assert SystemGuard.DEFAULT_ALLOWED_PATHS == ["./workspace", "."]
+    assert SystemGuard().allowed_paths == ["./workspace", "."]
 
 
 def test_the_readme_example_is_still_refused_as_a_forbidden_path():

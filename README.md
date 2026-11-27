@@ -152,7 +152,7 @@ guard.verify_file_access("~/.ssh/id_rsa")
 # {'verified': False, 'risk': 'FORBIDDEN_PATH', 'message': 'Access to path matching forbidden pattern is denied.'}
 ```
 
-`verify_file_access` allows a path only inside the allowed directories (`allowed_paths`), compared part by part, as written and after the links on the way are followed. The answer holds at the time of the call: a link changed afterwards can lead the open elsewhere, so the check is not a boundary against anyone who can change links inside the allowed directories. Open the `resolved_path` of an allowed result, not the path as given.
+`verify_file_access` allows a path only inside the allowed directories (`allowed_paths`; by default `./workspace` and the working directory, unless every user can write to them), compared part by part, as written and after the links on the way are followed. The answer holds at the time of the call: a link changed afterwards can lead the open elsewhere, so the check is not a boundary against anyone who can change links inside the allowed directories. Open the `resolved_path` of an allowed result, not the path as given.
 
 ### Engines, through the API
 
