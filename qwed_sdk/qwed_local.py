@@ -1323,8 +1323,10 @@ Z3 code:"""
             filepath: The file path to verify.
             operation: "read" or "write".
             allowed_paths: Optional list of allowed directories. None uses
-                the defaults ("./workspace" and "."); an empty list allows
-                no directory.
+                the defaults, "./workspace" and ".", each only where
+                ``SystemGuard`` can use it (not missing, and not under a
+                directory every user can write to); an empty list allows no
+                directory.
         
         Returns:
             VerificationResult with verified=True if allowed.

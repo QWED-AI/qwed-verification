@@ -1246,51 +1246,84 @@ def test_a_named_tmp_still_allows_its_own_files(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
-def test_a_default_directory_every_user_can_write_is_not_used(tmp_path, monkeypatch):
-    # The working directory in a shared directory, as /tmp is: the default
-    # "." would allow it, so it is not used. A caller who names it decides.
+def test_no_default_is_used_under_a_directory_every_user_can_write(tmp_path, monkeypatch):
+    # A shared directory, as /tmp is: another user could have made the
+    # working directory's workspace, or could make it while it is missing,
+    # and put files there. A caller who names a directory decides.
     shared = tmp_path / "shared"
     workspace = shared / "workspace"
+    private = shared / ".ssh" / "work"
     workspace.mkdir(parents=True)
+    private.mkdir(parents=True)
     shared.chmod(0o1777)
     workspace.chmod(0o755)
+    private.chmod(0o700)
+
     monkeypatch.chdir(shared)
     by_default = SystemGuard()
-
-    assert by_default.verify_file_access("report.txt")["risk"] == "SANDBOX_ESCAPE"
+    for path in ["report.txt", "workspace/report.txt", "workspace/new/report.txt"]:
+        assert by_default.verify_file_access(path)["risk"] == "SANDBOX_ESCAPE", path
     assert SystemGuard(allowed_paths=["."]).verify_file_access("report.txt")["verified"] is True
-    # Its own workspace, which only its owner can write, is still a default.
-    assert by_default.verify_file_access("workspace/report.txt")["verified"] is True
+    assert SystemGuard(allowed_paths=["./workspace"]).verify_file_access("workspace/report.txt")["verified"] is True
 
-    workspace.chmod(0o777)
+    # A private working directory below it is no default either, also where
+    # a forbidden folder sits between the two.
+    monkeypatch.chdir(private)
+    assert SystemGuard().verify_file_access("notes.txt")["risk"] == "SANDBOX_ESCAPE"
 
-    assert by_default.verify_file_access("workspace/report.txt")["risk"] == "SANDBOX_ESCAPE"
+
+def test_a_default_another_user_could_have_made_is_not_used(tmp_path, monkeypatch):
+    # The rule applies to the defaults only, and on every system.
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    cwd = os.path.realpath(".")
+    monkeypatch.setattr(system_guard, "_open_to_others", lambda path: os.path.normcase(path) == os.path.normcase(cwd))
+
+    assert SystemGuard().verify_file_access("report.txt")["risk"] == "SANDBOX_ESCAPE"
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("report.txt")["verified"] is True
+    # The default ./workspace is still used when it is not open to others.
+    assert SystemGuard().verify_file_access("workspace/report.txt")["verified"] is True
 
 
-def test_writable_by_all_reads_the_mode_bits(tmp_path, monkeypatch):
-    directory = str(tmp_path / "d")
+def test_open_to_others_reads_the_mode_bits_up_to_the_root(monkeypatch):
+    leaf = os.path.join(os.sep, "srv", "app", "proj")
+    parent = os.path.dirname(leaf)
     modes = {}
-    real_stat = os.stat
 
     def fake_stat(path, *args, **kwargs):
-        if os.fspath(path) == directory:
-            mode = modes["mode"]
-            if isinstance(mode, Exception):
-                raise mode
-            return SimpleNamespace(st_mode=stat.S_IFDIR | mode)
-        return real_stat(path, *args, **kwargs)
+        mode = modes.get(os.fspath(path), 0o755)
+        if isinstance(mode, Exception):
+            raise mode
+        return SimpleNamespace(st_mode=stat.S_IFDIR | mode)
 
-    monkeypatch.setattr(system_guard, "_ON_WINDOWS", False)
     monkeypatch.setattr(os, "stat", fake_stat)
-    for mode, expected in [(0o755, False), (0o775, False), (0o777, True), (0o1777, True), (0o703, True),
-                           (FileNotFoundError(2, "missing"), False), (NotADirectoryError(20, "not a dir"), False),
-                           (PermissionError(13, "denied"), True)]:
-        modes["mode"] = mode
-        assert system_guard._writable_by_all(directory) is expected, mode
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", False)
+    cases = [
+        ({}, False),
+        ({leaf: 0o775}, False),
+        ({leaf: 0o777}, True),
+        ({leaf: 0o703}, True),
+        ({parent: 0o1777}, True),
+        ({parent: 0o777}, True),
+        ({os.path.dirname(parent): 0o1777}, True),
+        ({leaf: FileNotFoundError(2, "missing")}, True),
+        ({leaf: NotADirectoryError(20, "not a directory")}, True),
+        ({parent: PermissionError(13, "denied")}, True),
+    ]
+    for case, expected in cases:
+        modes.clear()
+        modes.update(case)
+        assert system_guard._open_to_others(leaf) is expected, case
 
+    # Windows: the mode bits do not say who may write, so only a missing or
+    # unreadable directory counts.
     monkeypatch.setattr(system_guard, "_ON_WINDOWS", True)
-    modes["mode"] = 0o777
-    assert system_guard._writable_by_all(directory) is False
+    for case, expected in [({leaf: 0o777}, False), ({parent: 0o1777}, False),
+                           ({leaf: FileNotFoundError(2, "missing")}, True), ({parent: PermissionError(13, "denied")}, True)]:
+        modes.clear()
+        modes.update(case)
+        assert system_guard._open_to_others(leaf) is expected, case
 
 
 def test_the_defaults_are_workspace_and_the_working_directory():

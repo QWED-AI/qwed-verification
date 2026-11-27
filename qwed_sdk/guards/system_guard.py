@@ -272,20 +272,26 @@ def _is_windows_special(path: str) -> bool:
     )
 
 
-def _writable_by_all(path: str) -> bool:
+def _open_to_others(path: str) -> bool:
     """
-    Every user can write to ``path``, as to /tmp, so what is in it may be
-    anyone's. False on Windows, where the mode bits do not say who may
-    write, and when nothing is there. True when it cannot be read.
+    Another user may have made ``path``, or may put files in it: it, or a
+    directory above it, can be written by every user (as /tmp can), it is
+    not there, or it or a directory above it cannot be read. Only the mode
+    bits are read, not access control lists; on Windows, where the mode
+    bits do not say who may write, only the last two count.
     """
-    if _ON_WINDOWS:
-        return False
-    try:
-        return bool(os.stat(path).st_mode & stat.S_IWOTH)
-    except (FileNotFoundError, NotADirectoryError):
-        return False
-    except OSError:
-        return True
+    current = path
+    while True:
+        try:
+            mode = os.stat(current).st_mode
+        except OSError:
+            return True
+        if not _ON_WINDOWS and mode & stat.S_IWOTH:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
 
 
 def _starts_at_home(path: str) -> bool:
@@ -479,9 +485,12 @@ class SystemGuard:
         When the caller names no allowed directories, the defaults are
         "./workspace" and ".". The default "." is not used while the working
         directory is the root of a file system, and neither default is used
-        while every user can write to it (the working directory in /tmp,
-        say). That is not checked on Windows, where the mode bits do not
-        say who may write. Name a shared directory to allow it.
+        when it is missing or cannot be read, or when it or a directory
+        above it can be written by every user (anything under /tmp, say):
+        another user could have made it, or could put files in it. Only the
+        mode bits are read, not access control lists, and on Windows, where
+        they do not say who may write, only a missing or unreadable default
+        is left out. Name a directory to allow it.
 
         The answer holds for the file system at the time of the call. A link
         changed after the check can point elsewhere, and a hard link is the
@@ -575,8 +584,8 @@ class SystemGuard:
         A directory whose last part is a link or a junction is not used:
         whoever can replace the link decides where it points. Nor is one
         inside another allowed directory with a link between the two, since
-        whoever can write the outer directory can make that link. A default
-        directory every user can write to is not used either.
+        whoever can write the outer directory can make that link. Nor is a
+        default directory another user could have made or could write to.
         """
         entries = []
         for allowed_dir in self.allowed_paths:
@@ -595,7 +604,7 @@ class SystemGuard:
             for written, resolved, in_place in entries
             if in_place
             and not self._default_at_filesystem_root(written, resolved)
-            and not (self._default_allowed_paths and _writable_by_all(resolved))
+            and not (self._default_allowed_paths and _open_to_others(resolved))
             and self._nested_in_place(written, resolved, entries)
         ]
 

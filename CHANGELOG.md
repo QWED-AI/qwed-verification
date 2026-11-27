@@ -12,8 +12,8 @@ A major release that fixes one advisory reported from outside the project.
 with the characters of an allowed directory, and did not resolve links; it
 now decides a path part by part, reads the links on its way one by one, and
 refuses a link that leads outside before anything there is read. `/tmp`
-is no longer a default allowed directory, and a default directory every
-user can write to is not used.
+is no longer a default allowed directory, and no default is used under a
+directory every user can write to.
 `/verify/consensus` never returns `VERIFIED`: each engine decides a model's
 translation of the query or, for Stats, computes a value from its numbers,
 so it is advisory only. Each cause that stops a verification
@@ -73,10 +73,13 @@ recommended. Its regression tests are in
 - **`SystemGuard` no longer allows `/tmp` by default** (#677). Its
   default allowed directories were `/tmp`, `./workspace` and `.`, and
   every user of the machine can write to `/tmp`, so a file someone else
-  made there passed. The defaults are now `./workspace` and `.`, and
-  neither is used while every user can write to it, as to a working
-  directory in `/tmp`. That is not checked on Windows, where the mode bits
-  do not say who may write. A directory the caller names, `/tmp` included,
+  made there passed. The defaults are now `./workspace` and `.`, and a
+  default is not used when it is missing or cannot be read, or when it or
+  a directory above it can be written by every user, as anything under
+  `/tmp` can: another user could have made it, or could put files in it.
+  Only the mode bits are read, not access control lists, and on Windows,
+  where they do not say who may write, only a missing or unreadable
+  default is left out. A directory the caller names, `/tmp` included,
   still counts.
 
 - **The injection screen reads phrases as whole words (#646).** It refused
@@ -157,9 +160,10 @@ entry above or below.
     `allowed_paths` must be a list of strings or path objects: a single
     string raises `TypeError`, and an entry that is not a path, or holds
     NUL, raises `TypeError` or `ValueError` when the guard is made.
-  - `/tmp` is no longer a default, and a default directory every user can
-    write to is not used: name the directory in `allowed_paths` to allow
-    it. On macOS `/tmp` is a link to `/private/tmp`, and an allowed
+  - `/tmp` is no longer a default, and a default is not used when it is
+    missing, or under a directory every user can write to (a working
+    directory under `/tmp`, say): name the directory in `allowed_paths`
+    to allow it. On macOS `/tmp` is a link to `/private/tmp`, and an allowed
     directory that is a link or a junction is not used; name
     `/private/tmp`.
   - On Windows, `con.py`, `aux.c` and `nul.txt` are refused, and names with
