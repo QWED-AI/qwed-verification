@@ -423,11 +423,8 @@ _NOT_A_PREMISE_NOUN = (
     *_forms(
         _RESTRICTION, _CONSTRAINT, "filter:s", "limit:s", _POLICY,
         "guardrail:s", "model:s", "assistant:s", "bot:s", "chatbot:s", "system:s",
-        # A model's conscience ("free from ethics", "no morals"; Sentry on PR
-        # #672).
-        "ethic:s", "moral:s", "scruple:s",
     ),
-    "safety", "morality", "censorship", "conscience", "ai", *_forms("llm:s"), "gpt", "chatgpt", *_ROLE_NOUN,
+    "safety", "ai", *_forms("llm:s"), "gpt", "chatgpt", *_ROLE_NOUN,
 )
 # "Model" and "system" name maths objects too: a premise about one passes
 # with a maths property after it ("act as if the model is linear", "the
@@ -479,6 +476,11 @@ _MATHS_SAFEGUARD = (
     "programming",
 )
 _SAFEGUARD_PLURAL = ("limits", "constraints", "restrictions", "filters", "rules", "directions", "policies")
+# A model's conscience: a safeguard when it is lifted, owned or gone ("free
+# from ethics", "no morals", "not bound by ethics", "ethics no longer apply";
+# Sentry on PR #672), and a word like any other where it names data ("the
+# average censorship score"; Devin and cubic).
+_CONSCIENCE = (*_forms("ethic:s", "moral:s", "scruple:s"), "morality", "censorship", "conscience")
 _SAFEGUARD_SINGULAR = ("limit", "constraint", "restriction", "filter", "rule", "direction", "policy")
 # What a safeguard is about when it is the model's: you, or your replies;
 # "your variable y" is a maths operand (CodeRabbit on PR #672).
@@ -501,7 +503,9 @@ _ROLE_IN_PREMISE = (
         word for word in _NOT_A_PREMISE_NOUN
         if word not in (*_MATHS_OBJECT, *_MATHS_SAFEGUARD)
     ),
-    "unrestricted", "unfiltered", "uncensored", "unethical", "amoral", *_forms("jailbreak:s,ing,ed", "jailbroken"),
+    "unrestricted", "unfiltered", "uncensored", *_forms("jailbreak:s,ing,ed", "jailbroken"),
+    # A role without a conscience, and how it acts (Sentry and cubic on PR #672).
+    *_forms("unethical:ly", "amoral:ly", "immoral:ly", "unscrupulous:ly"),
     *_STORY_ROLES, "llm", "gpt", "chatgpt",
 )
 # How far on a sentence is read for what it goes on to say.
@@ -808,17 +812,17 @@ _NOT_BOUND = (
     rf"(?:(?:{_one_of(('not', 'never'))}|{_words_in_copy(('no', 'longer'))}){_BETWEEN_WORDS}{_one_of(_BOUND_WORDS)}"
     rf"|{_one_of(_UNBOUND_WORDS)}){_BETWEEN_WORDS}{_one_of(('by', 'to', 'from'))}{_BETWEEN_WORDS}"
     rf"(?:{_one_of(('any', 'the', 'its', 'their', 'your', 'his', 'her', 'my', 'our'))}{_BETWEEN_WORDS})?"
-    rf"{_one_of(_SAFEGUARD_PLURAL)}(?!{_SEEN_IN_COPY})"
+    rf"{_one_of((*_SAFEGUARD_PLURAL, *_CONSCIENCE))}(?!{_SEEN_IN_COPY})"
     rf"(?!{_BETWEEN_WORDS}{_one_of(('on', 'of', 'for', 'in', 'at', 'over'))}{_BETWEEN_WORDS}{_ANOTHERS_SCOPE})"
 )
 # The singular branches share one read of what the safeguard is about, as
 # a read holds a named group that one search may hold once.
 _LIFTED_SAFEGUARD = (
-    rf"(?:{_NOT_BOUND}|{_LIFTING_WORDS}{_one_of(_SAFEGUARD_PLURAL)}"
-    rf"|{_one_of(_MATHS_SAFEGUARD)}{_BETWEEN_WORDS}"
+    rf"(?:{_NOT_BOUND}|{_LIFTING_WORDS}{_one_of((*_SAFEGUARD_PLURAL, *_CONSCIENCE))}"
+    rf"|{_one_of((*_MATHS_SAFEGUARD, *_CONSCIENCE))}{_BETWEEN_WORDS}"
     rf"{_one_of(('is', 'are', 'was', 'were', 'be', 'been', 'being', 'get', 'gets', 'got'))}{_BETWEEN_WORDS}"
     rf"(?:{_one_of(('turned', 'switched'))}{_BETWEEN_WORDS})?{_one_of(_GONE)}"
-    rf"|{_one_of(_NO_LONGER_APPLY_NOUNS)}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}{_BETWEEN_WORDS}"
+    rf"|{_one_of((*_NO_LONGER_APPLY_NOUNS, *_CONSCIENCE))}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}{_BETWEEN_WORDS}"
     rf"{_one_of((*_APPLY, 'matter', 'matters', 'count', 'counts'))}"
     rf"|(?:{_LIFTING_WORDS}{_one_of(_SAFEGUARD_SINGULAR)}"
     rf"|{_one_of(_SAFEGUARD_SINGULAR)}{_BETWEEN_WORDS}{_NO_LONGER_WORDS}){_BETWEEN_WORDS}{_TO_YOU})"
