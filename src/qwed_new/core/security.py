@@ -423,8 +423,11 @@ _NOT_A_PREMISE_NOUN = (
     *_forms(
         _RESTRICTION, _CONSTRAINT, "filter:s", "limit:s", _POLICY,
         "guardrail:s", "model:s", "assistant:s", "bot:s", "chatbot:s", "system:s",
+        # A model's conscience ("free from ethics", "no morals"; Sentry on PR
+        # #672).
+        "ethic:s", "moral:s", "scruple:s",
     ),
-    "safety", "ai", *_forms("llm:s"), "gpt", "chatgpt", *_ROLE_NOUN,
+    "safety", "morality", "censorship", "conscience", "ai", *_forms("llm:s"), "gpt", "chatgpt", *_ROLE_NOUN,
 )
 # "Model" and "system" name maths objects too: a premise about one passes
 # with a maths property after it ("act as if the model is linear", "the
@@ -498,7 +501,7 @@ _ROLE_IN_PREMISE = (
         word for word in _NOT_A_PREMISE_NOUN
         if word not in (*_MATHS_OBJECT, *_MATHS_SAFEGUARD)
     ),
-    "unrestricted", "unfiltered", "uncensored", *_forms("jailbreak:s,ing,ed", "jailbroken"),
+    "unrestricted", "unfiltered", "uncensored", "unethical", "amoral", *_forms("jailbreak:s,ing,ed", "jailbroken"),
     *_STORY_ROLES, "llm", "gpt", "chatgpt",
 )
 # How far on a sentence is read for what it goes on to say.
@@ -740,9 +743,10 @@ _EXERCISE_NOUNS = (*_OPERAND_NOUNS, *_PRODUCTION_NOUNS)
 # PR #672).
 _LIST_JOIN = rf"{_GAP}+{_one_of(_COORDINATORS)}{_GAP}+"
 # A count may be a half ("half or one hour"), and a word that says which may
-# join two with a hyphen ("blue-green"; Devin on PR #672).
+# join two with a hyphen ("blue-green"), the non-breaking one and the one NFKC
+# makes of it too (Devin and cubic on PR #672).
 _A_COUNT_WORD = rf"(?:\d+|{_one_of((*_COUNT_WORDS, 'half'))})(?!{_SEEN_IN_COPY})"
-_A_PHRASE_WORD = rf"{_one_of(_PHRASE_WORDS)}(?:-{_one_of(_PHRASE_WORDS)})*(?!{_SEEN_IN_COPY})"
+_A_PHRASE_WORD = rf"{_one_of(_PHRASE_WORDS)}(?:[-\u2010\u2011]{_one_of(_PHRASE_WORDS)})*(?!{_SEEN_IN_COPY})"
 _AN_EXERCISE_NOUN = rf"{_one_of(_EXERCISE_NOUNS)}(?!{_SEEN_IN_COPY})"
 _COORDINATED = (
     rf"(?<!{_SEEN_IN_COPY})(?:{_A_PHRASE_WORD}{_LIST_JOIN}"
