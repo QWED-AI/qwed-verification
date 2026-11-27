@@ -55,9 +55,10 @@ class TranslationLayer:
       refuses what those routes refuse.
     - Stats and fact text (the question, each column name, the claim and the
       context) gets the phrase check the policy engine runs, with its
-      10,000-character bound. The maths check also refuses ordinary words
-      such as "mode" or "system" and anything over 2,000 characters, which
-      a statistics question or a fact's context often is.
+      10,000-character bound. The maths check adds layers written for a
+      maths question (Base64 payloads, likeness to its system prompt,
+      words such as jailbreak and sudo, mixed scripts, zero-width
+      characters) that a data file's header or a fact's context can trip.
     """
 
     def __init__(self):

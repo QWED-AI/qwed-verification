@@ -88,6 +88,29 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Fixed
 
+- **The injection screen reads phrases as whole words (#646).** It refused
+  ordinary maths and English and missed simple rewordings: on 172249b7 the
+  maths check refused 11 of 1,319 GSM8K questions and 383 of 11,864 SQuAD
+  questions, mostly on keywords found inside other words ("mode" in
+  "model", "sudo" in "sudoku"), and "Ignore all prior instructions" passed
+  the stats and fact check.
+  - A phrase is a sequence of words: an instruction verb, up to four
+    qualifiers and what it names ("ignore all the prior instructions"), or
+    a fixed phrase such as "developer mode". Its words may be joined by
+    whitespace, invisible characters, a dash, an underscore, a comma, an
+    apostrophe as in "let's", or a dot with no space after it, and Cyrillic
+    and Greek look-alike letters are read as Latin. Orders, messages, text and similar nouns also name
+    data, so they count as what an override names only after a qualifier
+    such as "previous" or "your": "Drop the orders under $20" passes.
+  - The maths check refuses only jailbreak, sudo and role play as words of
+    their own, and a Greek letter beside Latin is maths unless it sits
+    inside a Latin word. Its 2,000-character bound is the phrase check's
+    10,000. The policy check and the maths check read whole words, as the
+    stats and fact check does.
+  - None of those GSM8K questions, SQuAD questions or 1,204 SQuAD
+    paragraphs is refused now, and the stats and fact check refuses 70 of
+    160 English attacks from the deepset prompt-injections set (42 before).
+
 - **The Z3 engine in `maximum` consensus runs (#659).** It failed on every
   query and was recorded as `BLOCKED`. It now proves the translated claim
   from its constraints, as `/verify/logic` does: only a proof is `VERIFIED`

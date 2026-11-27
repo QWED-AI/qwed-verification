@@ -108,12 +108,17 @@ def test_every_method_refuses_an_injection_before_any_provider(provider, method)
     _refused(provider, lambda: METHODS[method][0](TranslationLayer(), INJECTION))
 
 
-@pytest.mark.parametrize(("method", "length"), [
-    *[(m, 2001) for m in QUESTION_METHODS],  # the control plane's bound
-    *[(m, 10001) for m in DATA_METHODS],     # the policy engine's bound
-])
-def test_an_over_long_text_is_refused(provider, method, length):
-    _refused(provider, lambda: METHODS[method][0](TranslationLayer(), "x" * length))
+@pytest.mark.parametrize("method", list(METHODS))
+def test_an_over_long_text_is_refused(provider, method):
+    # One bound for every text since #646: the phrase check's 10,000.
+    _refused(provider, lambda: METHODS[method][0](TranslationLayer(), "x" * 10001))
+
+
+@pytest.mark.parametrize("method", QUESTION_METHODS)
+def test_a_question_past_the_old_bound_reaches_the_provider(provider, method):
+    # The maths check refused any question over 2,000 characters until #646.
+    question = ("What is 2 + 3? " * 140)[:2001]
+    _reached(provider, method, lambda: METHODS[method][0](TranslationLayer(), question), question)
 
 
 @pytest.mark.parametrize("method", list(METHODS))
