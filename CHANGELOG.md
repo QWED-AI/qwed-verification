@@ -12,8 +12,9 @@ A major release that fixes one advisory reported from outside the project.
 with the characters of an allowed directory, and did not resolve links; it
 now decides a path part by part, reads the links on its way one by one, and
 refuses a link that leads outside before anything there is read.
-`/verify/consensus` never returns `VERIFIED`: its engines decide a model's
-translations, so it is advisory only. Each cause that stops a verification
+`/verify/consensus` never returns `VERIFIED`: each engine decides a model's
+translation of the query or, for Stats, computes a value from its numbers,
+so it is advisory only. Each cause that stops a verification
 has one verdict on every route, named in `constraint_id`, and
 `QWED_PROVIDER_TIMEOUT` must be a finite number of seconds above zero, or
 the server does not start. The injection screen reads phrases as whole
@@ -43,7 +44,8 @@ recommended. Its regression tests are in
     compared part by part: first as written, before the file system is
     read, and then exactly, for the path resolved as the file system shows
     it at the time of the call. An allowed result carries `resolved_path`:
-    open that, not the path as given.
+    open that, not the path as given. The answer holds at the time of the
+    call: a link changed afterwards can lead the open elsewhere.
   - Before resolving, the links on the way are read one by one, and a link
     that leads outside the allowed directories is `SANDBOX_ESCAPE` before
     anything there is read; on Windows a link to a network share would
@@ -131,7 +133,9 @@ entry above or below.
   provider QWED does not know, `/verify/logic`, `/verify/consensus`,
   `/verify/stats` and `/verify/fact` (with a provider named) are
   `UNVERIFIABLE` with `translation.no_provider`, where they were
-  `BLOCKED`. A refused question gets a fixed message, and the screen's
+  `BLOCKED`. The exception is a `maximum` consensus on an average, mean,
+  median or variance: Stats answers it without a model, so the result
+  names no cause. A refused question gets a fixed message, and the screen's
   reason stays in the server log. Read the cause from `constraint_id`, not
   from the status or the message.
 - **`QWED_PROVIDER_TIMEOUT`** must be a finite number of seconds above
