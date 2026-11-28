@@ -40,8 +40,9 @@ def _read(text: str) -> Decimal:
 
 
 # The spellings of a NaN or an infinity that Python reads, payload digits
-# included. float() reads all of them but the signalling NaN (sNaN).
-_NON_FINITE = re.compile(r"[+-]?(?:s?nan[0-9]*|inf(?:inity)?)", re.IGNORECASE)
+# (of any script, as Decimal reads them) included. float() reads all of them
+# but the signalling NaN (sNaN) and a NaN with a payload.
+_NON_FINITE = re.compile(r"[+-]?(?:s?nan\d*|inf(?:inity)?)", re.IGNORECASE)
 _NON_FINITE_FIRST = ("s", "S", "n", "N", "i", "I")
 
 
@@ -69,9 +70,15 @@ def _parts(text: str) -> tuple[bool, str, int]:
     if plain is not None and (plain.group(2) or plain.group(3)):
         sign, whole, fraction, exponent = plain.groups()
         fraction = fraction or ""
-        if exponent is not None and len(exponent.lstrip("+-").lstrip("0")) > _MAX_EXPONENT_DIGITS:
-            raise ValueError(f"A decimal literal's exponent is too large: {text[:40]!r}")
-        return sign == "-", whole + fraction, int(exponent or 0) - len(fraction)
+        power = 0
+        if exponent is not None:
+            # Leading zeros are dropped first: int() counts them against
+            # Python's limit for an integer written as text.
+            magnitude = exponent.lstrip("+-").lstrip("0") or "0"
+            if len(magnitude) > _MAX_EXPONENT_DIGITS:
+                raise ValueError(f"A decimal literal's exponent is too large: {text[:40]!r}")
+            power = -int(magnitude) if exponent.startswith("-") else int(magnitude)
+        return sign == "-", whole + fraction, power - len(fraction)
     sign, digits, exponent = _read(text).as_tuple()
     if not isinstance(exponent, int):
         # 'n', 'N' or 'F': a NaN, a signalling NaN or an infinity.

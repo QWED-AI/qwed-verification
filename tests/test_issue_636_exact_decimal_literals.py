@@ -87,7 +87,7 @@ def test_an_integer_stays_an_int():
     assert type(atom) is int
 
 
-@pytest.mark.parametrize("text", ["sNaN", "-sNaN", "snan", "+sNaN", "sNaN123", "NaN5"])
+@pytest.mark.parametrize("text", ["sNaN", "-sNaN", "snan", "+sNaN", "sNaN123", "NaN5", "NaN\uff15", "sNaN\u0663"])
 def test_a_signalling_nan_is_refused_not_taken_as_a_name(text):
     # float() does not read sNaN, but the decimal grammar does.
     assert names_a_non_finite_number(text)
@@ -436,10 +436,9 @@ def test_the_direct_reading_agrees_with_decimal(text):
         got = exact_decimal(text)
     except ValueError:
         got = None
-    if expected is not None and got is not None:
-        assert got == expected
-    if expected is None:
-        assert got is None
+    # Every value drawn here is far inside the size bound, so a refusal of a
+    # literal Decimal reads would be a false rejection.
+    assert got == expected
 
 
 def test_an_exponent_beyond_every_bound_is_refused_quickly():
@@ -448,4 +447,8 @@ def test_an_exponent_beyond_every_bound_is_refused_quickly():
         with pytest.raises(ValueError):
             exact_decimal(text)
     assert exact_decimal("1e" + "0" * 30 + "5") == Fraction(100000)
+    # Leading zeros of the exponent do not count against Python's limit for
+    # an integer written as text.
+    assert exact_decimal("1e" + "0" * 5000 + "5") == Fraction(100000)
+    assert exact_decimal("1e-" + "0" * 5000 + "5") == Fraction(1, 100000)
     assert time.monotonic() - start < 2
