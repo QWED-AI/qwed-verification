@@ -122,11 +122,9 @@ def test_the_template_makes_each_copy_owner_only_before_it_is_filled_in():
     steps = _header_steps()
     for copy in _header_commands("cp"):
         destination = copy.split()[-1]
-        uses = [i for i, step in enumerate(steps) if destination in step.split() or f"in {destination})" in step]
-        # Right after the copy, before the step that fills it in and before
-        # any other use of the file.
-        assert steps[uses[0]] == copy
-        assert steps[uses[1]] == f"chmod 600 {destination}"
+        at = steps.index(copy)
+        # The very next step, so nothing reads or fills in the file before.
+        assert steps[at + 1] == f"chmod 600 {destination}"
 
 
 @pytest.mark.parametrize("destination, outside", [
