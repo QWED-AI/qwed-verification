@@ -10,12 +10,21 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 - **Kubernetes: the Secret template is `deploy/kubernetes/secret.yaml.example`**
   (#182). `secret.yaml` was tracked although `.gitignore` ignores it, so the
   rule protected nothing: a filled-in copy was committed like any other
-  change. Copy the template to `secret.yaml` and fill it in there; git
-  ignores that copy, and `kubectl apply -f deploy/kubernetes/` does not apply
-  the template, whose name does not end in `.yaml`. A cluster that has the
-  Secret keeps it, since `kubectl apply` does not delete it. A test now fails
+  change. `kubectl apply -f deploy/kubernetes/` does not apply the template,
+  whose name does not end in `.yaml`. Copy it outside the checkout with
+  `cp -n`, fill it in there and apply it after the directory, as the
+  template's header shows: a copy outside the checkout is never committed,
+  and switching releases does not touch it. A cluster that has the Secret
+  keeps it, since `kubectl apply` does not delete it. If you filled in the
+  tracked `secret.yaml`, git will not pull while it has local changes: copy
+  it out of the checkout, run `git restore deploy/kubernetes/secret.yaml`,
+  then pull. Git still ignores that path, but do not keep a filled-in copy
+  there if you check out older releases: they track it with empty values,
+  and git overwrites an ignored file that the checked-out release tracks
+  (`git checkout --no-overwrite-ignore` refuses instead). A test now fails
   when the repository tracks a file its `.gitignore` ignores, and the
-  repository's own secret scan reads the deployment templates as well.
+  repository's own secret scan also reads the deployment templates and TOML
+  and INI files.
 
 ### Fixed
 

@@ -80,8 +80,9 @@ check_prs.py
 update_cache.py
 fix_cache.py
 
-# Kubernetes secrets (contain credentials): the filled-in copy of
-# deploy/kubernetes/secret.yaml.example, which is the tracked template
+# Kubernetes secrets (contain credentials). The tracked template is
+# deploy/kubernetes/secret.yaml.example; keep the filled-in copy outside the
+# checkout, as its header says. A copy put here is still never committed.
 deploy/kubernetes/secret.yaml
 
 # Local audit configuration (may contain API keys) and generated reports
