@@ -111,8 +111,12 @@ updates:
         patterns:
           - "*"
 
+  # Both Dockerfiles use the same base image, so Dependabot reads both
+  # directories (#184).
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/docker/crosshair-sandbox"
     schedule:
       interval: "monthly"
       time: "06:00"
