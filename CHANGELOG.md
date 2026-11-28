@@ -34,9 +34,15 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   compiler before. A variable's own power stays symbolic.
 - **Kubernetes: the ConfigMap names no model.** `deploy/kubernetes/configmap.yaml`
   set `AZURE_OPENAI_DEPLOYMENT` to `gpt-4`, although QWED names no model of
-  its own. The value is now empty, and the Azure OpenAI provider stops and
-  says to set it until you name your deployment. A test checks that no file
-  under `deploy/` names a model.
+  its own. The value is now empty: set it to your Azure OpenAI deployment
+  before you apply the ConfigMap. While it is empty the server starts and
+  passes its probes, and each request that needs the model returns
+  `UNVERIFIABLE` with a message naming the setting. Pods read the ConfigMap
+  when they start, so after changing it run
+  `kubectl rollout restart deployment/qwed-core`; a pod started before keeps
+  its old value. A test checks that every `*_MODEL` or `*_DEPLOYMENT`
+  setting under `deploy/` is empty or taken from the environment, and that
+  no file there names a model.
 - **Dependabot updates the CrossHair sandbox image** (#184). Its docker entry
   read only the root `Dockerfile`, so `docker/crosshair-sandbox/Dockerfile`,
   which uses the same base image, was left behind. The entry reads both
