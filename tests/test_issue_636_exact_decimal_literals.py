@@ -181,7 +181,7 @@ def test_the_process_limit_for_integer_text_lowers_the_bound():
             "1" + "0" * 3999 + "2e-1",
             True,
             marks=pytest.mark.skipif(
-                0 < getattr(sys, "get_int_max_str_digits", lambda: 0)() < 4001,
+                sys.version_info >= (3, 11) and 0 < sys.get_int_max_str_digits() < 4001,
                 reason="needs an int text limit of at least 4,001 digits",
             ),
         ),

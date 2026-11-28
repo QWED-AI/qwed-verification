@@ -24,19 +24,25 @@ MAX_DECIMAL_DIGITS = 4_000
 MAX_DECIMAL_TEXT = 3 * MAX_DECIMAL_DIGITS
 
 
+def _process_int_limit() -> int:
+    """The process's limit on digits when an integer is read from or written
+    as text (``sys.set_int_max_str_digits``, Python 3.11 and later); 0 for
+    none."""
+    if sys.version_info >= (3, 11):
+        return sys.get_int_max_str_digits()
+    return 0
+
+
 def _digit_limit() -> int:
     """MAX_DECIMAL_DIGITS, or the process's own lower limit for writing an
-    integer as text (``sys.set_int_max_str_digits``), if one is set."""
-    get_limit = getattr(sys, "get_int_max_str_digits", None)
-    limit = get_limit() if get_limit is not None else 0
+    integer as text, if one is set."""
+    limit = _process_int_limit()
     return min(MAX_DECIMAL_DIGITS, limit) if limit else MAX_DECIMAL_DIGITS
 
 
 def _int_text_limit() -> int:
     """The most digits int() reads from text in this process."""
-    get_limit = getattr(sys, "get_int_max_str_digits", None)
-    limit = get_limit() if get_limit is not None else 0
-    return limit or MAX_DECIMAL_TEXT
+    return _process_int_limit() or MAX_DECIMAL_TEXT
 
 
 def _read(text: str) -> Decimal:
