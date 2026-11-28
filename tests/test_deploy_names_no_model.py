@@ -114,12 +114,13 @@ def _shipped_in(texts):
             metadata = node.get("metadata")
             if node.get("kind") in ("Secret", "ConfigMap") and isinstance(metadata, dict):
                 # One resource: a Secret's stringData overrides its data, as
-                # Kubernetes merges them, even with an empty value; a
-                # ConfigMap has data and binaryData, and no stringData. Its
-                # data holds values, not resources, so the walk does not go
-                # into it.
+                # Kubernetes merges them, even with an empty value. An env
+                # entry reads a ConfigMap's data only: it has no stringData,
+                # and its binaryData does not reach the environment. A
+                # resource's data holds values, not resources, so the walk
+                # does not go into it.
                 values = {}
-                fields = ("data", "stringData") if node["kind"] == "Secret" else ("data", "binaryData")
+                fields = ("data", "stringData") if node["kind"] == "Secret" else ("data",)
                 for field in fields:
                     if isinstance(node.get(field), dict):
                         values.update(node[field])
@@ -344,7 +345,8 @@ def test_a_key_that_deploy_ships_is_read_as_written(shipped_value, settings):
     # A ConfigMap has no stringData: an empty one there hides nothing.
     ("kind: ConfigMap\nmetadata: {name: c}\ndata: {K: custom-v1}\nstringData: {K: ''}\n",
      {("ConfigMap", "c"): {"K": "custom-v1"}}),
-    ("kind: ConfigMap\nmetadata: {name: c}\nbinaryData: {K: Y3VzdG9t}\n", {("ConfigMap", "c"): {"K": "Y3VzdG9t"}}),
+    # A binaryData key does not reach the environment.
+    ("kind: ConfigMap\nmetadata: {name: c}\nbinaryData: {K: Y3VzdG9t}\n", {("ConfigMap", "c"): {}}),
     # A ConfigMap's data that looks like a resource is still data.
     ("kind: ConfigMap\nmetadata: {name: c}\ndata: {kind: ConfigMap, data: x}\n",
      {("ConfigMap", "c"): {"kind": "ConfigMap", "data": "x"}}),
