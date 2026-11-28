@@ -1499,6 +1499,43 @@ def test_a_path_below_a_default_that_cannot_be_checked_is_refused(tmp_path, monk
         locked.chmod(0o755)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads every mode")
+def test_a_mode_that_cannot_be_read_after_the_walk_refuses_the_path(tmp_path, monkeypatch):
+    # The walk over the parts passes; the directory is then locked before the
+    # mode check reads it, as a change between the two reads would do. Only
+    # the mode check can refuse here, with real permissions and os.stat.
+    monkeypatch.setattr(system_guard, "_open_to_others", lambda path: False)
+    project = tmp_path / "proj"
+    locked = project / "locked"
+    (locked / "inner").mkdir(parents=True)
+    project.chmod(0o755)
+    monkeypatch.chdir(project)
+    checked = []
+    real_shared_below = system_guard._shared_below
+
+    def lock_then_check(root, path):
+        checked.append(path)
+        locked.chmod(0o000)
+        try:
+            return real_shared_below(root, path)
+        finally:
+            locked.chmod(0o755)
+
+    monkeypatch.setattr(system_guard, "_shared_below", lock_then_check)
+    by_default = SystemGuard()
+
+    for path in ["locked/inner", "locked/inner/x.txt", "locked/x.txt"]:
+        assert by_default.verify_file_access(path)["risk"] == "SANDBOX_ESCAPE", path
+    assert checked, "the mode check did not run"
+    # The locked directory's own mode can be read, and it is not shared.
+    assert by_default.verify_file_access("locked")["verified"] is True
+    # A caller who names the directory decides: the mode check does not run.
+    checked.clear()
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("locked/x.txt")["verified"] is True
+    assert checked == []
+
+
 def test_the_defaults_are_workspace_and_the_working_directory():
     assert SystemGuard.DEFAULT_ALLOWED_PATHS == ["./workspace", "."]
     assert SystemGuard().allowed_paths == ["./workspace", "."]
