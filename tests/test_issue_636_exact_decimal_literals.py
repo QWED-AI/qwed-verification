@@ -175,8 +175,16 @@ def test_the_process_limit_for_integer_text_lowers_the_bound():
         ("5555555555e-4005", False),
         # A 4,001-digit even coefficient over 10 reduces to 4,000 digits over 5.
         # Written as text, not str(int): a lower int text limit must not stop
-        # the file being collected.
-        ("1" + "0" * 3999 + "2e-1", True),
+        # the file being collected. Under such a limit int() cannot read the
+        # coefficient, so the value is refused, as the limit asks.
+        pytest.param(
+            "1" + "0" * 3999 + "2e-1",
+            True,
+            marks=pytest.mark.skipif(
+                0 < getattr(sys, "get_int_max_str_digits", lambda: 0)() < 4001,
+                reason="needs an int text limit of at least 4,001 digits",
+            ),
+        ),
         ("1" + "0" * 3999 + "1e-1", False),
     ],
 )
