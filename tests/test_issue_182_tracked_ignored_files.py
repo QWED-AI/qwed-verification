@@ -123,7 +123,10 @@ def test_the_template_makes_each_copy_owner_only_before_it_is_filled_in():
     for copy in _header_commands("cp"):
         destination = copy.split()[-1]
         at = steps.index(copy)
-        # The very next step, so nothing reads or fills in the file before.
+        uses = [i for i, step in enumerate(steps) if destination in step.split() or f"in {destination})" in step]
+        # Nothing uses the file before the copy, and the very next step
+        # restricts it, so nothing reads or fills it in before that.
+        assert uses[0] == at
         assert steps[at + 1] == f"chmod 600 {destination}"
 
 
