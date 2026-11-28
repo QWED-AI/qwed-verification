@@ -168,6 +168,11 @@ def test_the_process_limit_for_integer_text_lowers_the_bound():
         ("0." + "1" * MAX_DECIMAL_DIGITS, False),
         ("1e999999999", False),
         ("1e-999999999", False),
+        # The bound is on the reduced fraction: 5e-4000 is 1 / (2 * 10**3999).
+        ("5e-4000", True),
+        ("25e-4001", True),
+        ("3e-4000", False),
+        ("5555555555e-4005", False),
     ],
 )
 def test_the_size_of_a_literal_is_bounded(text, allowed):
@@ -381,6 +386,9 @@ def test_a_float_node_without_a_position_is_refused():
         "(GT (POW " + "9" * 3999 + ".0 0.5) 1)",
         "(GT (POW " + "9" * 3999 + " 0.75) 1)",
         "(GT (POW " + "7" * 1000 + " 0.5) 1)",
+        # An algebraic base: SymPy distributes the power over 2**4999 * sqrt(2).
+        "(GT (POW (POW (POW (POW 2.0 0.5) 9999) 9999) 9999) 1)",
+        "(GT (POW (POW (POW 2.0 0.5) 9999) 9999) 1)",
     ],
 )
 def test_a_huge_exact_power_is_refused_quickly(program):
@@ -404,6 +412,9 @@ def test_a_huge_exact_power_is_refused_quickly(program):
         "(EQ (POW 4 0.5) 2)",
         "(GT (POW 2 1e-19) 1)",
         "(GT (POW " + "7" * 998 + "9 0.5) 1)",
+        "(EQ (POW (POW 2.0 0.5) 2) 2)",
+        "(GT (POW (POW 2.0 0.5) 9999) 1)",
+        "(GT (POW (POW 3 0.5) (POW 2 0.5)) 1)",
     ],
 )
 def test_an_ordinary_exact_power_compiles(program):

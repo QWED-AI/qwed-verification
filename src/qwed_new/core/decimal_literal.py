@@ -63,6 +63,18 @@ _PLAIN = re.compile(r"([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?", re.ASCII)
 _MAX_EXPONENT_DIGITS = 18
 
 
+def _power(exponent: str | None, text: str) -> int:
+    """The exponent written after ``e``, or 0. Leading zeros are dropped
+    first: int() counts them against Python's limit for an integer written
+    as text."""
+    if exponent is None:
+        return 0
+    magnitude = exponent.lstrip("+-").lstrip("0") or "0"
+    if len(magnitude) > _MAX_EXPONENT_DIGITS:
+        raise ValueError(f"A decimal literal's exponent is too large: {text[:40]!r}")
+    return -int(magnitude) if exponent.startswith("-") else int(magnitude)
+
+
 def _parts(text: str) -> tuple[bool, str, int]:
     """(negative, coefficient digits, exponent) of a finite decimal."""
     if not isinstance(text, str) or len(text) > MAX_DECIMAL_TEXT:
@@ -71,15 +83,7 @@ def _parts(text: str) -> tuple[bool, str, int]:
     if plain is not None and (plain.group(2) or plain.group(3)):
         sign, whole, fraction, exponent = plain.groups()
         fraction = fraction or ""
-        power = 0
-        if exponent is not None:
-            # Leading zeros are dropped first: int() counts them against
-            # Python's limit for an integer written as text.
-            magnitude = exponent.lstrip("+-").lstrip("0") or "0"
-            if len(magnitude) > _MAX_EXPONENT_DIGITS:
-                raise ValueError(f"A decimal literal's exponent is too large: {text[:40]!r}")
-            power = -int(magnitude) if exponent.startswith("-") else int(magnitude)
-        return sign == "-", whole + fraction, power - len(fraction)
+        return sign == "-", whole + fraction, _power(exponent, text) - len(fraction)
     sign, digits, exponent = _read(text).as_tuple()
     if not isinstance(exponent, int):
         # 'n', 'N' or 'F': a NaN, a signalling NaN or an infinity.
@@ -92,8 +96,8 @@ def exact_decimal(text: str) -> Fraction:
 
     Raises ValueError when ``text`` is not a finite decimal (``inf``, ``nan``
     and ``sNaN`` are refused), is longer than MAX_DECIMAL_TEXT, or when its
-    exact value as a fraction would need more than MAX_DECIMAL_DIGITS digits
-    (or the process's lower limit) in the numerator or the denominator.
+    exact value as a reduced fraction would need more than MAX_DECIMAL_DIGITS
+    digits (or the process's lower limit) in the numerator or the denominator.
     """
     negative, digits, exponent = _parts(text)
     # Zeros at the end of the coefficient cancel (1000e-3 is 1, 0e99 is 0),
@@ -103,12 +107,23 @@ def exact_decimal(text: str) -> Fraction:
     trimmed = trimmed.lstrip("0")
     if not trimmed:
         return Fraction(0)
-    numerator_digits = len(trimmed) + max(exponent, 0)
-    denominator_digits = max(-exponent, 0) + 1
     limit = _digit_limit()
-    if max(numerator_digits, denominator_digits) > limit:
-        raise ValueError(f"A decimal literal may need at most {limit} digits: {text[:40]!r}")
-    coefficient = -int(trimmed) if negative else int(trimmed)
+    too_large = f"A decimal literal may need at most {limit} digits: {text[:40]!r}"
     if exponent >= 0:
-        return Fraction(coefficient * 10**exponent)
-    return Fraction(coefficient, 10**-exponent)
+        # A whole number: exactly len(trimmed) + exponent digits.
+        if len(trimmed) + exponent > limit:
+            raise ValueError(too_large)
+        coefficient = int(trimmed)
+        return Fraction(-coefficient * 10**exponent if negative else coefficient * 10**exponent)
+    # Factors of 2 and 5 in the coefficient cancel against 10**k, which takes
+    # at most as many digits off the denominator as the coefficient has: past
+    # that, the value cannot fit and nothing is built.
+    k = -exponent
+    if len(trimmed) > limit or k + 1 - len(trimmed) > limit:
+        raise ValueError(too_large)
+    coefficient = int(trimmed)
+    value = Fraction(-coefficient if negative else coefficient, 10**k)
+    bound = 10**limit
+    if abs(value.numerator) >= bound or value.denominator >= bound:
+        raise ValueError(too_large)
+    return value

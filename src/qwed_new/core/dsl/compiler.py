@@ -53,6 +53,25 @@ def _check_pow_cost(base: Any, exponent: Any) -> None:
             raise ValueError("POW demands unbounded exact-integer expansion")
 
 
+def _digits(number: int) -> int:
+    """The decimal digits of ``number``, found from its bits and one or two
+    comparisons, as str() refuses an integer of more than 4,300 digits."""
+    magnitude = abs(number)
+    digits = magnitude.bit_length() * 30103 // 100000 + 1
+    while digits > 1 and magnitude < 10 ** (digits - 1):
+        digits -= 1
+    return digits
+
+
+def _exact_size(value: Any) -> int:
+    """Digits of the exact numbers a numeric SymPy value is built from: a
+    Rational's own, or those of every Rational inside an algebraic number such
+    as 2**4999 * sqrt(2). An integer power expands about that many digits for
+    each unit of the exponent."""
+    rationals = [value] if isinstance(value, sympy.Rational) else value.atoms(sympy.Rational)
+    return sum(_digits(r.p) + _digits(r.q) for r in rationals)
+
+
 def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
     """Reject an exact power of two SymPy numbers beyond the same bounds.
 
@@ -62,9 +81,12 @@ def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
     at all. SymPy expands the whole part of the exponent, so that is what is
     bounded, and (POW 2 0.99999) stays an exact power; a fractional part asks
     for an exact root, bounded by the base's digits and the root's degree.
-    Powers with a symbol stay symbolic and are not bounded.
+    An algebraic base, such as the sqrt(2) of (POW (POW 2.0 0.5) 9999), is
+    bounded by the digits of the numbers it is built from, since SymPy
+    distributes the power over them. Powers with a symbol stay symbolic and
+    are not bounded.
     """
-    if not (isinstance(base, sympy.Rational) and isinstance(exponent, sympy.Rational)):
+    if not isinstance(exponent, sympy.Rational) or not getattr(base, "is_number", False):
         return
     if base in (0, 1, -1):
         return
@@ -73,10 +95,10 @@ def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
         raise ValueError(
             f"POW exponent exceeds the maximum magnitude of {_MAX_POW_EXPONENT}"
         )
-    digits = len(str(abs(base.p))) + len(str(base.q))
+    digits = _exact_size(base)
     if digits * whole > _MAX_POW_EXPANSION_DIGITS:
         raise ValueError("POW demands unbounded exact expansion")
-    if exponent.q != 1 and (digits > _MAX_ROOT_BASE_DIGITS or len(str(exponent.q)) > _MAX_ROOT_DEGREE_DIGITS):
+    if exponent.q != 1 and (digits > _MAX_ROOT_BASE_DIGITS or _digits(exponent.q) > _MAX_ROOT_DEGREE_DIGITS):
         raise ValueError("POW asks for an exact root of a number too large to compute")
 
 
