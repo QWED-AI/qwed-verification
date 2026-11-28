@@ -88,6 +88,10 @@ def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
     """
     if not isinstance(exponent, sympy.Rational) or not getattr(base, "is_number", False):
         return
+    if isinstance(base, sympy.Pow) and isinstance(base.base, sympy.Rational) and base.base > 0             and isinstance(base.exp, sympy.Rational):
+        # SymPy combines (b**e1)**e2 into b**(e1*e2) for a positive b, so
+        # (POW (POW 2 0.0001) 20000) is 2**2: bound the combined power.
+        base, exponent = base.base, base.exp * exponent
     if base in (0, 1, -1):
         return
     whole = abs(exponent.p) // exponent.q

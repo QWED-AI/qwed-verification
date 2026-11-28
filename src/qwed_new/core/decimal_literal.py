@@ -32,6 +32,13 @@ def _digit_limit() -> int:
     return min(MAX_DECIMAL_DIGITS, limit) if limit else MAX_DECIMAL_DIGITS
 
 
+def _int_text_limit() -> int:
+    """The most digits int() reads from text in this process."""
+    get_limit = getattr(sys, "get_int_max_str_digits", None)
+    limit = get_limit() if get_limit is not None else 0
+    return limit or MAX_DECIMAL_TEXT
+
+
 def _read(text: str) -> Decimal:
     try:
         return Decimal(text)
@@ -115,11 +122,12 @@ def exact_decimal(text: str) -> Fraction:
             raise ValueError(too_large)
         coefficient = int(trimmed)
         return Fraction(-coefficient * 10**exponent if negative else coefficient * 10**exponent)
-    # Factors of 2 and 5 in the coefficient cancel against 10**k, which takes
-    # at most as many digits off the denominator as the coefficient has: past
-    # that, the value cannot fit and nothing is built.
+    # Factors of 2 and 5 in the coefficient cancel against 10**k. The reduced
+    # numerator keeps at least len(trimmed) - k digits and the reduced
+    # denominator at least k + 1 - len(trimmed): past either, the value cannot
+    # fit and nothing is built. int() also has a limit of its own.
     k = -exponent
-    if len(trimmed) > limit or k + 1 - len(trimmed) > limit:
+    if len(trimmed) - k > limit or k + 1 - len(trimmed) > limit or len(trimmed) > _int_text_limit():
         raise ValueError(too_large)
     coefficient = int(trimmed)
     value = Fraction(-coefficient if negative else coefficient, 10**k)

@@ -173,6 +173,9 @@ def test_the_process_limit_for_integer_text_lowers_the_bound():
         ("25e-4001", True),
         ("3e-4000", False),
         ("5555555555e-4005", False),
+        # A 4,001-digit even coefficient over 10 reduces to 4,000 digits over 5.
+        (str(10**4000 + 2) + "e-1", True),
+        (str(10**4000 + 1) + "e-1", False),
     ],
 )
 def test_the_size_of_a_literal_is_bounded(text, allowed):
@@ -415,6 +418,8 @@ def test_a_huge_exact_power_is_refused_quickly(program):
         "(EQ (POW (POW 2.0 0.5) 2) 2)",
         "(GT (POW (POW 2.0 0.5) 9999) 1)",
         "(GT (POW (POW 3 0.5) (POW 2 0.5)) 1)",
+        # SymPy combines (2**0.0001)**20000 into 2**2.
+        "(EQ (POW (POW 2 0.0001) 20000) 4)",
     ],
 )
 def test_an_ordinary_exact_power_compiles(program):
