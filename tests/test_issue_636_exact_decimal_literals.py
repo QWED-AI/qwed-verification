@@ -427,6 +427,10 @@ def test_a_float_node_without_a_position_is_refused():
         # An algebraic base: SymPy distributes the power over 2**4999 * sqrt(2).
         "(GT (POW (POW (POW (POW 2.0 0.5) 9999) 9999) 9999) 1)",
         "(GT (POW (POW (POW 2.0 0.5) 9999) 9999) 1)",
+        # SymPy distributes a power over a product: (x/2)**n builds 2**n.
+        "(GT (POW (MULT 0.5 x) 10000000000) 0)",
+        "(GT (POW (MULT 2 x) 1000000) 0)",
+        "(GT (POW (MULT (POW 2.0 0.5) x) 100000) 0)",
     ],
 )
 def test_a_huge_exact_power_is_refused_quickly(program):
@@ -455,6 +459,11 @@ def test_a_huge_exact_power_is_refused_quickly(program):
         "(GT (POW (POW 3 0.5) (POW 2 0.5)) 1)",
         # SymPy combines (2**0.0001)**20000 into 2**2.
         "(EQ (POW (POW 2 0.0001) 20000) 4)",
+        # A symbol's own power stays symbolic.
+        "(GT (POW x 10000000000) 0)",
+        "(GT (POW (MULT -1 x) 10000000000) 0)",
+        "(GT (POW (MULT 0.5 x) 2) 0)",
+        "(GT (POW (PLUS x 0.5) 1000) 0)",
     ],
 )
 def test_an_ordinary_exact_power_compiles(program):

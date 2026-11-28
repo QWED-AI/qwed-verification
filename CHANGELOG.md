@@ -28,9 +28,10 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   times that part are above 100,000, or when a fractional part asks for a
   root of a base of more than 1,000 digits or of a degree of more than 20
   digits. An algebraic base such as `sqrt(2)` counts the digits of the
-  numbers it is built from, and a nested power of a positive number is
-  checked by its combined exponent. Integer bases had no bound in this
-  compiler before. A power with a variable stays symbolic.
+  numbers it is built from, a nested power of a positive number is checked
+  by its combined exponent, and so are the numeric factors of a product with
+  a variable, such as the 1/2 of x/2. Integer bases had no bound in this
+  compiler before. A variable's own power stays symbolic.
 
 ## [12.0.0] - 2026-11-28
 

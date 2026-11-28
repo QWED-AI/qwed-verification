@@ -83,11 +83,20 @@ def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
     for an exact root, bounded by the base's digits and the root's degree.
     An algebraic base, such as the sqrt(2) of (POW (POW 2.0 0.5) 9999), is
     bounded by the digits of the numbers it is built from, since SymPy
-    distributes the power over them. Powers with a symbol stay symbolic and
-    are not bounded.
+    distributes the power over them; so is the numeric part of a product
+    with a symbol, such as the 1/2 of x/2. A symbol's own power stays
+    symbolic and is not bounded.
     """
-    if not isinstance(exponent, sympy.Rational) or not getattr(base, "is_number", False):
+    if not isinstance(exponent, sympy.Rational):
         return
+    if not getattr(base, "is_number", False):
+        # SymPy distributes a power over a product and evaluates its numeric
+        # factors, so (x/2)**10000000000 builds 2**10000000000: bound the
+        # numeric part of the base; a symbol alone stays symbolic.
+        numeric = [factor for factor in sympy.Mul.make_args(base) if getattr(factor, "is_number", False)]
+        if not numeric:
+            return
+        base = sympy.Mul(*numeric)
     if isinstance(base, sympy.Pow) and isinstance(base.base, sympy.Rational) and base.base > 0             and isinstance(base.exp, sympy.Rational):
         # SymPy combines (b**e1)**e2 into b**(e1*e2) for a positive b, so
         # (POW (POW 2 0.0001) 20000) is 2**2: bound the combined power.
