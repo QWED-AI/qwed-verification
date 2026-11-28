@@ -12,9 +12,10 @@ data:
   # The name of your Azure OpenAI deployment; set it before deploying. QWED
   # names no model of its own. While this is empty the server still starts
   # and passes its probes, and each request that needs the model returns
-  # UNVERIFIABLE with a message naming this setting. Pods read this
-  # ConfigMap when they start: after changing it, run
-  # kubectl rollout restart deployment/qwed-core.
+  # UNVERIFIABLE; once the Azure key, endpoint and API version are set, its
+  # message names this setting. Pods read this ConfigMap when they start:
+  # after changing it, run
+  # kubectl rollout restart deployment/qwed-core -n qwed.
   AZURE_OPENAI_DEPLOYMENT: ""
   AZURE_OPENAI_API_VERSION: "2023-05-15"
   # How long an attestation the server issues stays valid, in seconds: 60

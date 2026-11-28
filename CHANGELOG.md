@@ -37,17 +37,17 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   its own. The value is now empty: set it to your Azure OpenAI deployment
   before you apply the ConfigMap. While it is empty the server starts and
   passes its probes, and each request that needs the model returns
-  `UNVERIFIABLE` with a message naming the setting. Pods read the ConfigMap
-  when they start, so after changing it run
-  `kubectl rollout restart deployment/qwed-core`; a pod started before keeps
-  its old value. A test checks that every `*_MODEL` or `*_DEPLOYMENT`
+  `UNVERIFIABLE`; once the Azure key, endpoint and API version are set, its
+  message names the setting. Pods read the ConfigMap when they start, so
+  after changing it run `kubectl rollout restart deployment/qwed-core -n qwed`;
+  a pod started before keeps its old value. A test checks that every `*_MODEL` or `*_DEPLOYMENT`
   setting under `deploy/` is empty or taken from the environment, and that
   no file there names a model.
 - **Dependabot updates the CrossHair sandbox image** (#184). Its docker entry
   read only the root `Dockerfile`, so `docker/crosshair-sandbox/Dockerfile`,
   which uses the same base image, was left behind. The entry reads both
-  directories now, in one group, and a test checks that every Dockerfile in
-  the repository is covered.
+  directories now, and a test checks that every Dockerfile in the repository
+  is covered.
 
 ## [12.0.0] - 2026-11-28
 
