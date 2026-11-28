@@ -1324,8 +1324,9 @@ Z3 code:"""
             operation: "read" or "write".
             allowed_paths: Optional list of allowed directories. None uses
                 the defaults, "./workspace" and ".", each only where
-                ``SystemGuard`` can use it (not missing, and not under a
-                directory every user can write to); an empty list allows no
+                ``SystemGuard`` can use it: not missing and, outside Windows,
+                not under a directory every user can write to (see
+                ``SystemGuard.verify_file_access``). An empty list allows no
                 directory.
         
         Returns:

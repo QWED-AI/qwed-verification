@@ -1326,6 +1326,84 @@ def test_open_to_others_reads_the_mode_bits_up_to_the_root(monkeypatch):
         assert system_guard._open_to_others(leaf) is expected, case
 
 
+def test_a_missing_default_workspace_is_not_used(monkeypatch):
+    # End to end, with nothing stubbed: at a file system root the default "."
+    # is not used, so only a missing ./workspace could allow the path, and
+    # another user could make it.
+    root = os.path.abspath(os.sep)
+    if os.path.exists(os.path.join(root, "workspace")):
+        pytest.skip("a workspace folder exists at the file system root here")
+    monkeypatch.chdir(root)
+    target = os.path.join(root, "workspace", "report.txt")
+
+    assert SystemGuard().verify_file_access(target)["risk"] == "SANDBOX_ESCAPE"
+    # Named, a missing directory still counts, as before.
+    assert SystemGuard(allowed_paths=["./workspace"]).verify_file_access(target)["verified"] is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
+def test_a_path_below_a_default_through_a_shared_directory_is_refused(tmp_path, monkeypatch):
+    # Only what lies below the defaults is read here: tmp_path may itself sit
+    # under /tmp, which the test above covers.
+    monkeypatch.setattr(system_guard, "_open_to_others", lambda path: False)
+    project = tmp_path / "proj"
+    drop = project / "notes" / "drop"
+    drop.mkdir(parents=True)
+    (project / "workspace").mkdir()
+    project.chmod(0o755)
+    (project / "notes").chmod(0o755)
+    drop.chmod(0o1777)
+    (project / "workspace").chmod(0o777)
+    monkeypatch.chdir(project)
+    by_default = SystemGuard()
+
+    for path in ["workspace", "workspace/secret.txt", "notes/drop", "notes/drop/x.txt", "notes/drop/new/x.txt"]:
+        assert by_default.verify_file_access(path)["risk"] == "SANDBOX_ESCAPE", path
+    for path in ["report.txt", "notes/x.txt", "notes/new/dir/x.txt"]:
+        assert by_default.verify_file_access(path)["verified"] is True, path
+    # A caller who names the directory decides.
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("workspace/secret.txt")["verified"] is True
+
+
+def test_shared_below_reads_each_directory_between(monkeypatch):
+    root = os.path.join(os.sep, "srv", "proj")
+    first = os.path.join(root, "a")
+    second = os.path.join(first, "b")
+    path = os.path.join(second, "file.txt")
+    modes = {}
+
+    def fake_stat(target, *args, **kwargs):
+        mode = modes.get(os.fspath(target))
+        if mode is None:
+            raise FileNotFoundError(2, "missing")
+        return SimpleNamespace(st_mode=mode)
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", False)
+    folder, plain = stat.S_IFDIR, stat.S_IFREG
+    cases = [
+        ({first: folder | 0o755, second: folder | 0o755, path: plain | 0o644}, False),
+        ({first: folder | 0o755, second: folder | 0o777, path: plain | 0o644}, True),
+        ({first: folder | 0o1777, second: folder | 0o755, path: plain | 0o644}, True),
+        # A file's own bits are not read.
+        ({first: folder | 0o755, second: folder | 0o755, path: plain | 0o666}, False),
+        # What is not there yet is the caller's to make.
+        ({first: folder | 0o755}, False),
+        # The default itself is read before, when the roots are chosen.
+        ({root: folder | 0o777, first: folder | 0o755, second: folder | 0o755, path: plain | 0o644}, False),
+    ]
+    for case, expected in cases:
+        modes.clear()
+        modes.update(case)
+        assert system_guard._shared_below(root, path) is expected, case
+    assert system_guard._shared_below(root, root) is False
+
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", True)
+    modes.clear()
+    modes.update({first: folder | 0o777})
+    assert system_guard._shared_below(root, path) is False
+
+
 def test_the_defaults_are_workspace_and_the_working_directory():
     assert SystemGuard.DEFAULT_ALLOWED_PATHS == ["./workspace", "."]
     assert SystemGuard().allowed_paths == ["./workspace", "."]

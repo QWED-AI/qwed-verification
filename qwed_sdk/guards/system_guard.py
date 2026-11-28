@@ -294,6 +294,28 @@ def _open_to_others(path: str) -> bool:
         current = parent
 
 
+def _shared_below(root: str, path: str) -> bool:
+    """
+    ``path``, or a directory between it and ``root`` (both resolved, ``root``
+    not counted), is a directory every user can write to, so another user
+    may have put what is there. Only directories that are there count, and
+    only their mode bits; never on Windows, where the mode bits do not say
+    who may write.
+    """
+    if _ON_WINDOWS:
+        return False
+    current = path
+    while current != root and _is_inside(root, current):
+        try:
+            mode = os.stat(current).st_mode
+        except OSError:
+            mode = 0
+        if stat.S_ISDIR(mode) and mode & stat.S_IWOTH:
+            return True
+        current = os.path.dirname(current)
+    return False
+
+
 def _starts_at_home(path: str) -> bool:
     """
     "~", or a first part that starts with "~" followed by more parts: a shell
@@ -490,7 +512,9 @@ class SystemGuard:
         another user could have made it, or could put files in it. Only the
         mode bits are read, not access control lists, and on Windows, where
         they do not say who may write, only a missing or unreadable default
-        is left out. Name a directory to allow it.
+        is left out. Outside Windows, a path below a default is refused when
+        a directory on its way can be written by every user. Name a
+        directory to allow it.
 
         The answer holds for the file system at the time of the call. A link
         changed after the check can point elsewhere, and a hard link is the
@@ -548,6 +572,10 @@ class SystemGuard:
             return self._invalid_path(_UNRESOLVED)
         holding = [resolved for _, resolved in roots if _is_inside(resolved, real_path)]
         if not holding:
+            return self._sandbox_escape(filepath)
+        if self._default_allowed_paths and any(_shared_below(root, real_path) for root in holding):
+            # Below a default, a directory every user can write to is not the
+            # caller's choice: another user may have put what is there.
             return self._sandbox_escape(filepath)
         if any(self._forbidden_below(root, real_path) for root in holding):
             return self._forbidden_path()

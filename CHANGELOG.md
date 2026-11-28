@@ -79,8 +79,9 @@ recommended. Its regression tests are in
   `/tmp` can: another user could have made it, or could put files in it.
   Only the mode bits are read, not access control lists, and on Windows,
   where they do not say who may write, only a missing or unreadable
-  default is left out. A directory the caller names, `/tmp` included,
-  still counts.
+  default is left out. Outside Windows, a path below a default is also
+  refused when a directory on its way can be written by every user. A
+  directory the caller names, `/tmp` included, still counts.
 
 - **The injection screen reads phrases as whole words (#646).** It refused
   ordinary maths and English and missed simple rewordings: on 172249b7 the
@@ -162,8 +163,9 @@ entry above or below.
     NUL, raises `TypeError` or `ValueError` when the guard is made.
   - `/tmp` is no longer a default, and a default is not used when it is
     missing, or under a directory every user can write to (a working
-    directory under `/tmp`, say): name the directory in `allowed_paths`
-    to allow it. On macOS `/tmp` is a link to `/private/tmp`, and an allowed
+    directory under `/tmp`, say); nor is a path below a default through
+    such a directory. Name the directory in `allowed_paths` to allow
+    it. On macOS `/tmp` is a link to `/private/tmp`, and an allowed
     directory that is a link or a junction is not used; name
     `/private/tmp`.
   - On Windows, `con.py`, `aux.c` and `nul.txt` are refused, and names with
