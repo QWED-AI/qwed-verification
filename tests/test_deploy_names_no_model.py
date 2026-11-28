@@ -5,8 +5,9 @@
 (``providers/base.py``'s ``configured_model``), so the files ship it empty.
 
 The deciding check is by setting, not by name: every model or deployment
-setting in a deployment file (``MODEL``, ``*_MODEL``, ``*_DEPLOYMENT``,
-``model``, in any case) is empty, or refers to another variable in a form
+setting in a deployment file (any key with ``model`` or ``deployment`` in
+it, in any case and however it is joined) is empty, or refers to another
+variable in a form
 the format substitutes: ``${NAME}`` with no default in a Compose file or in
 a .env value outside single quotes, and ``$(NAME)`` in a Kubernetes ``env``
 entry when an entry above it in the same list defines ``NAME`` from a
@@ -38,9 +39,11 @@ SUBSTITUTES = "substitutes"
 LITERAL = "literal"
 KUBERNETES_ENV = "kubernetes-env"
 
-SETTING_KEY = re.compile(
-    r"^(?:[a-z0-9]+_)*(?:model|deployment)(?:_[a-z0-9]+)*$", re.IGNORECASE
-)
+# Any key with "model" or "deployment" in it, in any case and however it is
+# joined: OPENAI_MODEL, modelName, AZURE_OPENAI_DEPLOYMENTNAME. That also
+# takes in keys such as MODELS_DIR; such a key then has to be empty or come
+# from the environment too, which errs on the side of checking.
+SETTING_KEY = re.compile(r"model|deployment", re.IGNORECASE)
 # KEY=value or KEY: value on one line, with an optional list dash, `export`
 # and quotes around the key.
 LINE = re.compile(
@@ -59,9 +62,11 @@ COMPOSE_TAG = re.compile(
 # A Kubernetes dependent variable: $(NAME). $$(NAME) is a literal.
 KUBERNETES_REFERENCE = re.compile(r"^\$\(([A-Za-z_][A-Za-z0-9_]*)\)$")
 
+# Bounded by anything but a letter or digit, so an underscore or a hyphen
+# does not hide a name (my_gpt-4, AZURE_X_gpt4).
 MODEL_NAME = re.compile(
-    r"\b(?:gpt-?\d|o[1-9](?:-(?:mini|pro|preview))?\b|claude-\w|gemini-\w|llama-?\d"
-    r"|mistral-\w|mixtral|deepseek|qwen\d?)",
+    r"(?<![A-Za-z0-9])(?:gpt-?\d|o[1-9](?:-(?:mini|pro|preview))?(?![A-Za-z0-9])|claude-\w|gemini-\w"
+    r"|llama-?\d|mistral-\w|mixtral|deepseek|qwen\d?)",
     re.IGNORECASE,
 )
 
@@ -148,7 +153,7 @@ def _untagged(name, text):
 def _walk(node, found, context, shipped):
     if isinstance(node, dict):
         for key, value in node.items():
-            if isinstance(key, str) and SETTING_KEY.match(key) and not isinstance(value, (dict, list)):
+            if isinstance(key, str) and SETTING_KEY.search(key) and not isinstance(value, (dict, list)):
                 found.append((key, value, context))
             _walk(value, found, context, shipped)
     elif isinstance(node, list):
@@ -156,13 +161,13 @@ def _walk(node, found, context, shipped):
         for item in node:
             if isinstance(item, str) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*(=|$)", item):
                 key, _, value = item.partition("=")
-                if SETTING_KEY.match(key):
+                if SETTING_KEY.search(key):
                     found.append((key, value if "=" in item else None, context))
             elif isinstance(item, dict) and isinstance(item.get("name"), str):
                 name = item["name"]
                 here = (KUBERNETES_ENV, tuple(defined))
                 source, shipped_value = _secret_or_config_map(item.get("valueFrom"), shipped)
-                if SETTING_KEY.match(name) and ("value" in item or "valueFrom" in item):
+                if SETTING_KEY.search(name) and ("value" in item or "valueFrom" in item):
                     # An env entry; valueFrom reads a Secret or a ConfigMap,
                     # and one that deploy/ ships reads the text written there.
                     if source == "shipped":
@@ -201,7 +206,7 @@ def _settings_in(name, text, shipped=None):
             _walk(document, found, SUBSTITUTES if "compose" in name else LITERAL, shipped or {})
         return found
     for match in LINE.finditer(text):
-        if SETTING_KEY.match(match.group(2)):
+        if SETTING_KEY.search(match.group(2)):
             found.append((match.group(2), *_unquote(match.group(3))))
     return found
 
@@ -279,7 +284,11 @@ def _deploy_files():
      [("AZURE_OPENAI_DEPLOYMENT", "prod", SUBSTITUTES)]),
     (".env.example", "AZURE_OPENAI_DEPLOYMENT= # set it\n", [("AZURE_OPENAI_DEPLOYMENT", "", SUBSTITUTES)]),
     (".env.example", "OPENAI_MODEL='${OPENAI_MODEL}'\n", [("OPENAI_MODEL", "${OPENAI_MODEL}", LITERAL)]),
-    (".env.example", "DATABASE_URL=x\nMODELS_DIR=/m\n", []),
+    (".env.example", "DATABASE_URL=x\nMODELS_DIR=/m\n", [("MODELS_DIR", "/m", SUBSTITUTES)]),
+    (".env.example", "DATABASE_URL=x\nPORT=8000\n", []),
+    ("values.yaml", "llm:\n  modelName: custom-v1\n  deploymentName: d\n",
+     [("modelName", "custom-v1", LITERAL), ("deploymentName", "d", LITERAL)]),
+    (".env.example", "AZURE_OPENAI_DEPLOYMENTNAME=prod\n", [("AZURE_OPENAI_DEPLOYMENTNAME", "prod", SUBSTITUTES)]),
 ])
 def test_the_settings_are_read_in_each_format(name, text, settings):
     assert _settings_in(name, text) == settings
@@ -313,7 +322,8 @@ def test_the_value_check(value, context, allowed):
     "gpt-4", "GPT-4", "gpt4", "gpt-4o-mini", "gpt-3.5-turbo", "o1", "o3", "o1-mini",
     "o1-pro", "openai-o3", "o3-preview", "claude-sonnet-4", "Claude-3-5-sonnet",
     "gemini-1.5-pro", "llama3", "Llama-2-70b", "mistral-large", "mixtral-8x7b",
-    "DeepSeek-R1", "deepseek-chat", "qwen2", "Qwen-72B",
+    "DeepSeek-R1", "deepseek-chat", "qwen2", "Qwen-72B", "my_gpt-4", "AZURE_X_gpt4", "x_o3",
+    "deploy-claude-3",
 ])
 def test_the_name_pattern_finds_model_names(text):
     assert MODEL_NAME.search(f'MODEL: "{text}"')
