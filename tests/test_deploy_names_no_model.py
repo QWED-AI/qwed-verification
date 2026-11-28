@@ -107,18 +107,26 @@ def _shipped_in(texts):
     shipped = {}
 
     def collect(node):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Secret", "ConfigMap"):
-                values = shipped.setdefault((node["kind"], (node.get("metadata") or {}).get("name")), {})
-                for field in ("data", "stringData"):
-                    for key, value in (node.get(field) or {}).items():
-                        if values.get(key) in (None, ""):
-                            values[key] = value
-            for value in node.values():
-                collect(value)
-        elif isinstance(node, list):
+        if isinstance(node, list):
             for item in node:
                 collect(item)
+        elif isinstance(node, dict):
+            metadata = node.get("metadata")
+            if node.get("kind") in ("Secret", "ConfigMap") and isinstance(metadata, dict):
+                # One resource: stringData overrides data, as Kubernetes
+                # merges them, even with an empty value. Its data holds
+                # values, not resources, so the walk does not go into it.
+                values = {}
+                for field in ("data", "stringData"):
+                    if isinstance(node.get(field), dict):
+                        values.update(node[field])
+                merged = shipped.setdefault((node["kind"], metadata.get("name")), {})
+                for key, value in values.items():
+                    if merged.get(key) in (None, ""):
+                        merged[key] = value
+                return
+            for value in node.values():
+                collect(value)
 
     for name, text in texts:
         if ".yaml" in name or ".yml" in name:
@@ -325,6 +333,19 @@ def test_a_key_that_deploy_ships_is_read_as_written(shipped_value, settings):
     manifest = "env:\n  - name: OPENAI_MODEL\n    valueFrom: {configMapKeyRef: {name: c, key: CHOICE}}\n"
 
     assert _settings_in("deployment.yaml", manifest, shipped) == settings
+
+
+@pytest.mark.parametrize("text, shipped", [
+    # stringData overrides data within one Secret, even when empty.
+    ("kind: Secret\nmetadata: {name: s}\ndata: {K: Y3VzdG9t}\nstringData: {K: ''}\n", {("Secret", "s"): {"K": ""}}),
+    # A ConfigMap's data that looks like a resource is still data.
+    ("kind: ConfigMap\nmetadata: {name: c}\ndata: {kind: ConfigMap, data: x}\n",
+     {("ConfigMap", "c"): {"kind": "ConfigMap", "data": "x"}}),
+    # Without metadata, a mapping is not a resource.
+    ("x:\n  kind: ConfigMap\n  data: {K: v}\n", {}),
+])
+def test_shipped_resources_are_read_as_kubernetes_merges_them(text, shipped):
+    assert _shipped_in([("x.yaml", text)]) == shipped
 
 
 @pytest.mark.parametrize("files", [
