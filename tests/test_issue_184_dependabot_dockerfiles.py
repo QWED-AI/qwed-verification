@@ -6,9 +6,11 @@ left behind. Every Dockerfile in the repository must sit in a directory a
 docker entry reads.
 
 Dependabot expands glob patterns only under ``directories``; ``directory``
-is a plain path. Matching here is per path segment and case-sensitive, with
-``**`` for any number of segments, so a pattern never matches across a
-``/`` and a test on Windows does not ignore case.
+is a plain path. Matching here is per path segment and case-sensitive, so a
+pattern never matches across a ``/`` and a test on Windows does not ignore
+case. As in Ruby's ``Dir.glob``, which Dependabot uses, ``**`` followed by
+another segment spans any number of directories, while a ``**`` at the end
+matches one segment, like ``*``.
 """
 
 import os
@@ -20,7 +22,13 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP_PARTS = {"node_modules", "site-packages", "venv", "build", "dist"}
+# Directories that are not the repository's own files: version control,
+# virtual environments, caches, installed packages and local worktrees.
+# Other dot directories, such as .devcontainer, are searched.
+SKIP_PARTS = {
+    ".git", ".venv", "venv", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".hypothesis", ".claude", "__pycache__", "node_modules", "site-packages", "build", "dist",
+}
 
 
 # Dockerfile, Containerfile, server.Dockerfile, Dockerfile.dev: the name is
@@ -35,9 +43,7 @@ def _is_dockerfile(name):
 def _dockerfile_directories():
     found = set()
     for directory, subdirectories, files in os.walk(ROOT):
-        # Dot directories (.git, .venv, worktrees) and installed packages are
-        # not the repository's own files, so the walk does not enter them.
-        subdirectories[:] = [d for d in subdirectories if not d.startswith(".") and d not in SKIP_PARTS]
+        subdirectories[:] = [d for d in subdirectories if d not in SKIP_PARTS]
         if any(_is_dockerfile(name) for name in files):
             parent = Path(directory).relative_to(ROOT).as_posix()
             found.add("/" if parent == "." else "/" + parent)
@@ -54,9 +60,10 @@ def _glob_covers(directory, pattern):
     def match(i, j):
         if j == len(globs):
             return i == len(names)
-        if globs[j] == "**":
+        if globs[j] == "**" and j + 1 < len(globs):
             return any(match(k, j + 1) for k in range(i, len(names) + 1))
-        return i < len(names) and fnmatchcase(names[i], globs[j]) and match(i + 1, j + 1)
+        segment = "*" if globs[j] == "**" else globs[j]
+        return i < len(names) and fnmatchcase(names[i], segment) and match(i + 1, j + 1)
 
     return match(0, 0)
 
@@ -89,7 +96,10 @@ def test_dockerfile_names(name, dockerfile):
     ("/", {"directory": "/"}, True),
     ("/docker/crosshair-sandbox", {"directories": ["/", "/docker/crosshair-sandbox"]}, True),
     ("/docker/crosshair-sandbox", {"directories": ["/docker/*"]}, True),
-    ("/docker/crosshair-sandbox", {"directories": ["/**"]}, True),
+    ("/docker/crosshair-sandbox", {"directories": ["/**/*"]}, True),
+    ("/docker", {"directories": ["/**/*"]}, True),
+    ("/docker/crosshair-sandbox", {"directories": ["/**"]}, False),
+    ("/docker", {"directories": ["/**"]}, True),
     ("/docker/crosshair-sandbox", {"directory": "/docker/*"}, False),
     ("/docker/crosshair-sandbox", {"directories": ["/*"]}, False),
     ("/docker/crosshair-sandbox", {"directories": ["/docker*"]}, False),

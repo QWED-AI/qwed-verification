@@ -9,12 +9,13 @@ setting in a deployment file (``MODEL``, ``*_MODEL``, ``*_DEPLOYMENT``,
 ``model``, in any case) is empty, or refers to another variable in a form
 the format substitutes: ``${NAME}`` with no default in a Compose file or in
 a .env value outside single quotes, and ``$(NAME)`` in a Kubernetes ``env``
-entry when an entry above it in the same list defines ``NAME``. Anything
+entry when an entry above it in the same list defines ``NAME`` from a
+required Secret or ConfigMap key, or from another such reference. Anything
 else, ``${NAME}`` in a ConfigMap included, is a literal value. YAML files
-are read as YAML, so a quoted key, a lowercase key, a Compose
-``environment`` list and a Kubernetes ``env`` entry (``name:`` with
-``value:`` or ``valueFrom:``) are all seen; other files are read line by
-line, and a value never runs on to the next line. A second check looks for
+are read as YAML, and one that does not parse fails, so a quoted key, a
+lowercase key, a Compose ``environment`` list and a Kubernetes ``env`` entry
+(``name:`` with ``value:`` or ``valueFrom:``) are all seen; other files are
+read line by line, and a value never runs on to the next line. A second check looks for
 model names anywhere under ``deploy/``; a list of names is never complete,
 so it only backs up the first.
 """
@@ -68,6 +69,13 @@ def _unquote(value):
     return re.sub(r"(?:^|[ \t]+)#.*$", "", value).strip(), SUBSTITUTES
 
 
+def _optional(source):
+    """Whether a valueFrom source is marked optional anywhere inside it."""
+    if isinstance(source, dict):
+        return source.get("optional") is True or any(_optional(v) for v in source.values())
+    return False
+
+
 def _walk(node, found, context):
     if isinstance(node, dict):
         for key, value in node.items():
@@ -83,11 +91,19 @@ def _walk(node, found, context):
                     found.append((key, value if "=" in item else None, context))
             elif isinstance(item, dict) and isinstance(item.get("name"), str):
                 name = item["name"]
+                here = (KUBERNETES_ENV, tuple(defined))
                 if SETTING_KEY.match(name) and ("value" in item or "valueFrom" in item):
                     # An env entry; valueFrom reads a Secret or a ConfigMap.
-                    entry = (KUBERNETES_ENV, tuple(defined)) if context == LITERAL else context
-                    found.append((name, item.get("value"), entry))
-                defined.append(name)
+                    found.append((name, item.get("value"), here if context == LITERAL else context))
+                # A later $(NAME) may refer to this entry only when its own
+                # value is not written here: a required Secret or ConfigMap
+                # key, or itself an allowed reference. An optional key may be
+                # absent, and then Kubernetes leaves $(NAME) as it is.
+                source = item.get("valueFrom")
+                if (source is not None and not _optional(source)) or (
+                    "value" in item and item["value"] not in (None, "") and _allowed(item["value"], here)
+                ):
+                    defined.append(name)
                 _walk(item, found, context)
             else:
                 _walk(item, found, context)
@@ -98,12 +114,11 @@ def _settings_in(name, text):
     context)."""
     found = []
     if ".yaml" in name or ".yml" in name:
-        try:
-            for document in yaml.safe_load_all(text):
-                _walk(document, found, SUBSTITUTES if "compose" in name else LITERAL)
-            return found
-        except yaml.YAMLError:
-            found = []
+        # A YAML file that does not parse fails the test, rather than being
+        # read line by line, which would miss a name/value env entry.
+        for document in yaml.safe_load_all(text):
+            _walk(document, found, SUBSTITUTES if "compose" in name else LITERAL)
+        return found
     for match in LINE.finditer(text):
         if SETTING_KEY.match(match.group(2)):
             found.append((match.group(2), *_unquote(match.group(3))))
@@ -137,6 +152,18 @@ def _deploy_files():
      ("env:\n  - name: DEPLOY_NAME\n    valueFrom: {secretKeyRef: {name: s, key: k}}\n"
       "  - name: AZURE_OPENAI_DEPLOYMENT\n    value: $(DEPLOY_NAME)\n"),
      [("AZURE_OPENAI_DEPLOYMENT", "$(DEPLOY_NAME)", (KUBERNETES_ENV, ("DEPLOY_NAME",)))]),
+    ("deployment.yaml",
+     ("env:\n  - name: DEPLOY_NAME\n    value: my-prod-dep\n"
+      "  - name: AZURE_OPENAI_DEPLOYMENT\n    value: $(DEPLOY_NAME)\n"),
+     [("AZURE_OPENAI_DEPLOYMENT", "$(DEPLOY_NAME)", (KUBERNETES_ENV, ()))]),
+    ("deployment.yaml",
+     ("env:\n  - name: DEPLOY_NAME\n    valueFrom: {configMapKeyRef: {name: c, key: k, optional: true}}\n"
+      "  - name: AZURE_OPENAI_DEPLOYMENT\n    value: $(DEPLOY_NAME)\n"),
+     [("AZURE_OPENAI_DEPLOYMENT", "$(DEPLOY_NAME)", (KUBERNETES_ENV, ()))]),
+    ("deployment.yaml",
+     ("env:\n  - name: A\n    valueFrom: {secretKeyRef: {name: s, key: k}}\n"
+      "  - name: B\n    value: $(A)\n  - name: OPENAI_MODEL\n    value: $(B)\n"),
+     [("OPENAI_MODEL", "$(B)", (KUBERNETES_ENV, ("A", "B")))]),
     ("docker-compose.yml", "env:\n  model: custom-v1\n", [("model", "custom-v1", SUBSTITUTES)]),
     ("docker-compose.yml", "e:\n  - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}\n  - GEMINI_MODEL\n",
      [("OPENAI_MODEL", "${OPENAI_MODEL:-gpt-4o}", SUBSTITUTES), ("GEMINI_MODEL", None, SUBSTITUTES)]),
@@ -150,6 +177,11 @@ def _deploy_files():
 ])
 def test_the_settings_are_read_in_each_format(name, text, settings):
     assert _settings_in(name, text) == settings
+
+
+def test_a_yaml_file_that_does_not_parse_fails():
+    with pytest.raises(yaml.YAMLError):
+        _settings_in("deployment.yaml", "env:\n  - name: OPENAI_MODEL\n    value: custom-v1\nbroken: [\n")
 
 
 @pytest.mark.parametrize("value, context, allowed", [
