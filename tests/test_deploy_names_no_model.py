@@ -10,7 +10,9 @@ setting in a deployment file (``MODEL``, ``*_MODEL``, ``*_DEPLOYMENT``,
 the format substitutes: ``${NAME}`` with no default in a Compose file or in
 a .env value outside single quotes, and ``$(NAME)`` in a Kubernetes ``env``
 entry when an entry above it in the same list defines ``NAME`` from a
-required Secret or ConfigMap key, or from another such reference. Anything
+required Secret or ConfigMap key, or from another such reference. A key of
+a Secret or ConfigMap that ``deploy/`` itself ships with a value is the
+repository's own text, so it counts as written there. Anything
 else, ``${NAME}`` in a ConfigMap included, is a literal value. YAML files
 are read as YAML, and one that does not parse fails, so a quoted key, a
 lowercase key, a Compose ``environment`` list and a Kubernetes ``env`` entry
@@ -75,24 +77,53 @@ def _unquote(value):
     return re.sub(r"(?:^|[ \t]+)#.*$", "", value).strip(), SUBSTITUTES
 
 
-def _secret_or_config_map(source):
+def _secret_or_config_map(source, shipped):
     """"required" or "optional" for a valueFrom that reads a Secret or
-    ConfigMap key, else None. A fieldRef or resourceFieldRef reads the pod's
-    own manifest or limits."""
+    ConfigMap key, "shipped" when deploy/ itself ships that Secret or
+    ConfigMap with a value for the key, else None; with the shipped value.
+    A fieldRef or resourceFieldRef reads the pod's own manifest or limits,
+    and a value deploy/ ships is the repository's own text."""
     if not isinstance(source, dict) or len(source) != 1:
-        return None
+        return None, None
     kind, selector = next(iter(source.items()))
     if kind not in ("secretKeyRef", "configMapKeyRef") or not isinstance(selector, dict):
-        return None
-    return "optional" if selector.get("optional") is True else "required"
+        return None, None
+    owner = ("Secret" if kind == "secretKeyRef" else "ConfigMap", selector.get("name"))
+    value = shipped.get(owner, {}).get(selector.get("key"))
+    if value not in (None, ""):
+        return "shipped", value
+    return ("optional" if selector.get("optional") is True else "required"), None
 
 
-def _walk(node, found, context):
+def _shipped_in(texts):
+    """The Secrets and ConfigMaps the deployment files ship, as
+    {(kind, name): {key: value}}, from (file name, text) pairs."""
+    shipped = {}
+    for name, text in texts:
+        if ".yaml" not in name and ".yml" not in name:
+            continue
+        for document in yaml.safe_load_all(_untagged(name, text)):
+            if isinstance(document, dict) and document.get("kind") in ("Secret", "ConfigMap"):
+                values = {}
+                for field in ("data", "stringData"):
+                    if isinstance(document.get(field), dict):
+                        values.update(document[field])
+                shipped[(document["kind"], (document.get("metadata") or {}).get("name"))] = values
+    return shipped
+
+
+def _untagged(name, text):
+    # Compose's merge tags, !reset and !override, mark how a value combines
+    # with another file; the value itself is plain YAML.
+    return COMPOSE_TAG.sub(r"\1", text) if "compose" in name else text
+
+
+def _walk(node, found, context, shipped):
     if isinstance(node, dict):
         for key, value in node.items():
             if isinstance(key, str) and SETTING_KEY.match(key) and not isinstance(value, (dict, list)):
                 found.append((key, value, context))
-            _walk(value, found, context)
+            _walk(value, found, context, shipped)
     elif isinstance(node, list):
         defined = []
         for item in node:
@@ -103,9 +134,14 @@ def _walk(node, found, context):
             elif isinstance(item, dict) and isinstance(item.get("name"), str):
                 name = item["name"]
                 here = (KUBERNETES_ENV, tuple(defined))
+                source, shipped_value = _secret_or_config_map(item.get("valueFrom"), shipped)
                 if SETTING_KEY.match(name) and ("value" in item or "valueFrom" in item):
-                    # An env entry; valueFrom reads a Secret or a ConfigMap.
-                    found.append((name, item.get("value"), here if context == LITERAL else context))
+                    # An env entry; valueFrom reads a Secret or a ConfigMap,
+                    # and one that deploy/ ships reads the text written there.
+                    if source == "shipped":
+                        found.append((name, shipped_value, LITERAL))
+                    else:
+                        found.append((name, item.get("value"), here if context == LITERAL else context))
                 # A later $(NAME) may refer to this entry only when its own
                 # value is not written here: a required Secret or ConfigMap
                 # key, or itself an allowed reference. A later entry with the
@@ -114,7 +150,7 @@ def _walk(node, found, context):
                 # it is absent the earlier value stays, and when present it is
                 # the operator's, so it keeps whatever standing NAME had (none,
                 # if nothing above defines NAME: then $(NAME) stays as it is).
-                source = _secret_or_config_map(item.get("valueFrom"))
+                # A key deploy/ ships with a value is written text.
                 if source != "optional":
                     if name in defined:
                         defined.remove(name)
@@ -122,24 +158,20 @@ def _walk(node, found, context):
                         "value" in item and item["value"] not in (None, "") and _allowed(item["value"], here)
                     ):
                         defined.append(name)
-                _walk(item, found, context)
+                _walk(item, found, context, shipped)
             else:
-                _walk(item, found, context)
+                _walk(item, found, context, shipped)
 
 
-def _settings_in(name, text):
+def _settings_in(name, text, shipped=None):
     """The model and deployment settings in one file, as (key, value,
-    context)."""
+    context). shipped holds the Secrets and ConfigMaps deploy/ ships."""
     found = []
     if ".yaml" in name or ".yml" in name:
         # A YAML file that does not parse fails the test, rather than being
         # read line by line, which would miss a name/value env entry.
-        # Compose's merge tags, !reset and !override, mark how a value
-        # combines with another file; the value itself is plain YAML.
-        if "compose" in name:
-            text = COMPOSE_TAG.sub(r"\1", text)
-        for document in yaml.safe_load_all(text):
-            _walk(document, found, SUBSTITUTES if "compose" in name else LITERAL)
+        for document in yaml.safe_load_all(_untagged(name, text)):
+            _walk(document, found, SUBSTITUTES if "compose" in name else LITERAL, shipped or {})
         return found
     for match in LINE.finditer(text):
         if SETTING_KEY.match(match.group(2)):
@@ -269,11 +301,35 @@ def test_the_name_pattern_leaves_other_values(text):
     assert not MODEL_NAME.search(f'VALUE: "{text}"')
 
 
+@pytest.mark.parametrize("shipped_value, settings", [
+    ("custom-v1", [("OPENAI_MODEL", "custom-v1", LITERAL)]),
+    ("", [("OPENAI_MODEL", None, (KUBERNETES_ENV, ()))]),
+])
+def test_a_key_that_deploy_ships_is_read_as_written(shipped_value, settings):
+    shipped = _shipped_in([("configmap.yaml", f"kind: ConfigMap\nmetadata: {{name: c}}\ndata: {{CHOICE: '{shipped_value}'}}\n")])
+    manifest = "env:\n  - name: OPENAI_MODEL\n    valueFrom: {configMapKeyRef: {name: c, key: CHOICE}}\n"
+
+    assert _settings_in("deployment.yaml", manifest, shipped) == settings
+
+
+def test_a_reference_to_a_key_that_deploy_ships_with_a_value_is_written_text():
+    shipped = _shipped_in([("secret.yaml", "kind: Secret\nmetadata: {name: s}\nstringData: {K: custom-v1}\n")])
+    manifest = (
+        "env:\n  - name: A\n    valueFrom: {secretKeyRef: {name: s, key: K}}\n"
+        "  - name: OPENAI_MODEL\n    value: $(A)\n"
+    )
+
+    [(_, value, context)] = _settings_in("deployment.yaml", manifest, shipped)
+    assert not _allowed(value, context)
+
+
 def test_every_model_setting_is_empty_or_refers_to_another_variable():
+    texts = [(path.name, path.read_text(encoding="utf-8", errors="replace")) for path in _deploy_files()]
+    shipped = _shipped_in(texts)
     settings = [
         (path.relative_to(ROOT).as_posix(), key, value, context)
-        for path in _deploy_files()
-        for key, value, context in _settings_in(path.name, path.read_text(encoding="utf-8", errors="replace"))
+        for path, (name, text) in zip(_deploy_files(), texts)
+        for key, value, context in _settings_in(name, text, shipped)
     ]
 
     assert ("deploy/kubernetes/configmap.yaml", "AZURE_OPENAI_DEPLOYMENT", "", LITERAL) in settings
