@@ -26,9 +26,9 @@ MAX_DECIMAL_TEXT = 3 * MAX_DECIMAL_DIGITS
 
 def _process_int_limit() -> int:
     """The process's limit on digits when an integer is read from or written
-    as text (``sys.set_int_max_str_digits``, Python 3.11 and later); 0 for
+    as text (``sys.set_int_max_str_digits``, from Python 3.10.7); 0 for
     none."""
-    if sys.version_info >= (3, 11):
+    if hasattr(sys, "get_int_max_str_digits"):
         return sys.get_int_max_str_digits()
     return 0
 

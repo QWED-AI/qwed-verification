@@ -142,7 +142,23 @@ def test_text_longer_than_the_bound_is_refused_before_it_is_read():
     assert time.monotonic() - start < 2
 
 
-@pytest.mark.skipif(not hasattr(sys, "set_int_max_str_digits"), reason="Python 3.11 and later")
+@pytest.mark.skipif(not hasattr(sys, "set_int_max_str_digits"), reason="Python 3.10.7 and later")
+def test_int_text_limit_decides_a_coefficient_longer_than_the_bound():
+    # The 4,001-digit even coefficient over 10 reduces to 4,000 digits over 5:
+    # int() must read 4,001 digits first, so the process limit decides it.
+    text = "1" + "0" * 3999 + "2e-1"
+    previous = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(4000)
+        with pytest.raises(ValueError):
+            exact_decimal(text)
+        sys.set_int_max_str_digits(4001)
+        assert exact_decimal(text) == Fraction(10**4000 + 2, 10)
+    finally:
+        sys.set_int_max_str_digits(previous)
+
+
+@pytest.mark.skipif(not hasattr(sys, "set_int_max_str_digits"), reason="Python 3.10.7 and later")
 def test_the_process_limit_for_integer_text_lowers_the_bound():
     previous = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(640)
@@ -181,7 +197,7 @@ def test_the_process_limit_for_integer_text_lowers_the_bound():
             "1" + "0" * 3999 + "2e-1",
             True,
             marks=pytest.mark.skipif(
-                sys.version_info >= (3, 11) and 0 < sys.get_int_max_str_digits() < 4001,
+                hasattr(sys, "get_int_max_str_digits") and 0 < sys.get_int_max_str_digits() < 4001,
                 reason="needs an int text limit of at least 4,001 digits",
             ),
         ),
