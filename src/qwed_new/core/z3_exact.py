@@ -13,6 +13,8 @@ from typing import Any
 
 from z3 import IntVal, RealVal, is_arith
 
+from qwed_new.core.decimal_literal import exact_decimal
+
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
@@ -27,15 +29,23 @@ def _sort(value: Any) -> str:
     return "other"
 
 
-def exact_real(text: str) -> Any:
-    """The decimal literal ``text`` as written (0.1 is 1/10), as a Z3 Real."""
-    value = Fraction(text)
+def _real(value: Fraction) -> Any:
     return RealVal(f"{value.numerator}/{value.denominator}")
 
 
+def exact_real(text: str) -> Any:
+    """The decimal literal ``text`` as written (0.1 is 1/10), as a Z3 Real.
+    ``text`` must be the literal's own text: a float's repr is already
+    rounded (#636)."""
+    return _real(exact_decimal(text))
+
+
 def literal(value: Any) -> Any:
-    """A number written in a formula: an int as it is, a float as the exact
-    decimal it was written as."""
+    """A number written in a formula: an int as it is, a decimal the parser
+    read from its text (a Fraction) as that exact value, a float as the
+    shortest decimal that reads back as it."""
+    if isinstance(value, Fraction):
+        return _real(value)
     return exact_real(repr(value)) if isinstance(value, float) else value
 
 

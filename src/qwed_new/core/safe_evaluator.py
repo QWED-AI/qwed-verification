@@ -22,9 +22,26 @@ class _ExactArithmetic(ast.NodeTransformer):
     """Route decimal literals and /, % and ** through z3_exact, so numbers are
     exact and one formula uses one arithmetic (GHSA-w73j)."""
 
+    def __init__(self, source: str) -> None:
+        # Each line's UTF-8 bytes, split where Python splits lines (\n, \r\n,
+        # \r), read once: the AST's offsets count bytes, and slicing these
+        # lines does not rescan the source for every literal.
+        self._lines = source.encode("utf-8").splitlines(keepends=True)
+
+    def _text_of(self, node: ast.Constant) -> str:
+        line = getattr(node, "lineno", None)
+        end_line = getattr(node, "end_lineno", None)
+        start = getattr(node, "col_offset", None)
+        end = getattr(node, "end_col_offset", None)
+        if line is None or end_line != line or start is None or end is None or not 1 <= line <= len(self._lines):
+            raise ValueError("The text of a decimal literal could not be read")
+        return self._lines[line - 1][start:end].decode("utf-8")
+
     def visit_Constant(self, node: ast.Constant) -> ast.AST:
         if isinstance(node.value, float):
-            call = ast.Call(ast.Name(_EXACT_REAL, ast.Load()), [ast.Constant(repr(node.value))], [])
+            # The literal's own text: Python has already rounded the float,
+            # so 0.10000000000000001 reads as 0.1 and 1e-400 as 0.0 (#636).
+            call = ast.Call(ast.Name(_EXACT_REAL, ast.Load()), [ast.Constant(self._text_of(node))], [])
             return ast.copy_location(call, node)
         return node
 
@@ -205,7 +222,7 @@ class SafeEvaluator:
         restricted_globals[_DIVIDE] = lambda left, right: z3_exact.divide(left, right, int_context)
         restricted_globals[_MODULO] = z3_exact.modulo
         restricted_globals[_POWER] = lambda base, exponent: z3_exact.power(base, exponent, int_context)
-        tree = ast.fix_missing_locations(_ExactArithmetic().visit(tree))
+        tree = ast.fix_missing_locations(_ExactArithmetic(stripped).visit(tree))
 
         try:
             # 4. Execute the validated AST in a restricted namespace

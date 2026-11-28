@@ -5,6 +5,34 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Fixed
+
+- **Logic: a decimal literal is the value written** (#636). The DSL parser
+  read a decimal with `float()`, and `LogicVerifier`'s evaluator took it from
+  Python's parser as a float, so both rounded it before turning it into an
+  exact number: `0.10000000000000001` was `0.1`, `1e-400` was `0` and
+  `1e400` was not a number. `DSLLogicVerifier.prove_from_dsl` and
+  `LogicVerifier.prove_theorem` then proved `0.1 == 0.10000000000000001` and
+  refuted `1.00000000000000001 > 1`, and `verify_logic` called two different
+  decimals contradictory. A decimal is now read from its text as an exact
+  fraction, in the DSL and in `LogicVerifier`. `inf`, `nan` and `sNaN` are
+  refused (`sNaN` was a variable name before), and so is a decimal whose
+  reduced fraction needs more than 4,000 digits above or below the line, or
+  more than the process's own limit for an integer written as text, and any
+  literal longer than 12,000 characters. The HTTP logic routes were not
+  affected: they refuse a decimal in the model's translation.
+- **DSL: the SymPy compiler bounds an exact power** (#636). A decimal there is
+  an exact `Rational` now, not a `Float`, so `(POW 0.5 10000000000)` would
+  have been expanded in full. An exact power of two numbers is refused when
+  the whole part of the exponent is above 10,000, when the base's digits
+  times that part are above 100,000, or when a fractional part asks for a
+  root of a base of more than 1,000 digits or of a degree of more than 20
+  digits. An algebraic base such as `sqrt(2)` counts the digits of the
+  numbers it is built from, a nested power of a positive number is checked
+  by its combined exponent, and so are the numeric factors of a product with
+  a variable, such as the 1/2 of x/2. Integer bases had no bound in this
+  compiler before. A variable's own power stays symbolic.
+
 ## [12.0.0] - 2026-11-28
 
 A major release that fixes one advisory reported from outside the project.

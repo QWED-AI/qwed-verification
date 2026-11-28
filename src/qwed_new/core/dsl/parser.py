@@ -7,9 +7,16 @@ S-expression logic format. It replaces unsafe eval() with structured parsing.
 Format: (AND (GT x 5) (LT y 10))
 """
 
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
+from fractions import Fraction
+
+from qwed_new.core.decimal_literal import exact_decimal, names_a_non_finite_number
+
+# The first characters of a NaN spelling that float() does not read (sNaN, a
+# NaN with payload digits): other names skip the check.
+_MAYBE_NAN = frozenset("sSnN+-")
 
 
 class OperatorCategory(str, Enum):
@@ -198,30 +205,37 @@ class QWEDLogicDSL:
             # Atom (variable, number, or boolean)
             return self._parse_atom(token), tokens[1:]
     
-    def _parse_atom(self, token: str) -> Union[int, float, bool, str]:
+    def _parse_atom(self, token: str) -> int | Fraction | bool | str:
         """
         Parse an atomic token (number, boolean, or variable name).
+
+        A decimal is the exact value its text writes, as a Fraction (#636).
         """
         # Boolean literals
         if token == 'True':
             return True
         if token == 'False':
             return False
-        
+
         # Try integer
         try:
             return int(token)
         except ValueError:
             pass
-        
-        # Try float
+
+        # A decimal: read from its text, not as a float, which would round
+        # 0.10000000000000001 to 0.1 before anything sees it (#636). A token
+        # Python reads as a number stays a number, so ``inf`` and ``nan`` are
+        # refused rather than taken as variable names; so is ``sNaN``, which
+        # float() does not read. Names such as ``_1`` stay names.
         try:
-            return float(token)
+            float(token)
         except ValueError:
-            pass
-        
-        # It's a variable name or operator
-        return token
+            if token[0] in _MAYBE_NAN and names_a_non_finite_number(token):
+                raise ValueError(f"Not a finite number: {token[:40]!r}") from None
+            # It's a variable name or operator
+            return token
+        return exact_decimal(token)
     
     def validate(self, ast: Any) -> Tuple[bool, Optional[str], Dict[str, Variable]]:
         """

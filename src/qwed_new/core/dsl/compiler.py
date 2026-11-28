@@ -6,6 +6,7 @@ Compiles validated AST from the parser into Z3 constraints or SymPy expressions.
 
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from fractions import Fraction
 
 # Z3 imports (lazy to avoid import errors if Z3 not installed)
 try:
@@ -31,6 +32,12 @@ except ImportError:
 # (e.g. (EQ x (POW 9 (POW 9 9)))) expands a huge integer on the request thread.
 _MAX_POW_EXPONENT = 10_000
 _MAX_POW_EXPANSION_DIGITS = 100_000
+# A fractional power of a number makes SymPy look for an exact root of the
+# base, when it is built and again when it is compared: bounded by the base's
+# digits and the root's degree (a 1,000-digit base or a 20-digit degree takes
+# well under a second; a 4,000-digit base or a 300-digit degree does not end).
+_MAX_ROOT_BASE_DIGITS = 1_000
+_MAX_ROOT_DEGREE_DIGITS = 20
 
 
 def _check_pow_cost(base: Any, exponent: Any) -> None:
@@ -44,6 +51,68 @@ def _check_pow_cost(base: Any, exponent: Any) -> None:
     if isinstance(base, int) and not isinstance(base, bool) and base != 0:
         if len(str(abs(base))) * abs(exponent) > _MAX_POW_EXPANSION_DIGITS:
             raise ValueError("POW demands unbounded exact-integer expansion")
+
+
+def _digits(number: int) -> int:
+    """The decimal digits of ``number``, found from its bits and one or two
+    comparisons, as str() refuses an integer of more than 4,300 digits."""
+    magnitude = abs(number)
+    digits = magnitude.bit_length() * 30103 // 100000 + 1
+    while digits > 1 and magnitude < 10 ** (digits - 1):
+        digits -= 1
+    return digits
+
+
+def _exact_size(value: Any) -> int:
+    """Digits of the exact numbers a numeric SymPy value is built from: a
+    Rational's own, or those of every Rational inside an algebraic number such
+    as 2**4999 * sqrt(2). An integer power expands about that many digits for
+    each unit of the exponent."""
+    rationals = [value] if isinstance(value, sympy.Rational) else value.atoms(sympy.Rational)
+    return sum(_digits(r.p) + _digits(r.q) for r in rationals)
+
+
+def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
+    """Reject an exact power of two SymPy numbers beyond the same bounds.
+
+    SymPy expands such a power in full. A decimal is an exact Rational since
+    #636, not a Float of fixed precision, so (POW 0.5 10000000000) would build
+    a denominator of three billion digits; an integer base had no bound here
+    at all. SymPy expands the whole part of the exponent, so that is what is
+    bounded, and (POW 2 0.99999) stays an exact power; a fractional part asks
+    for an exact root, bounded by the base's digits and the root's degree.
+    An algebraic base, such as the sqrt(2) of (POW (POW 2.0 0.5) 9999), is
+    bounded by the digits of the numbers it is built from, since SymPy
+    distributes the power over them; so is the numeric part of a product
+    with a symbol, such as the 1/2 of x/2. A symbol's own power stays
+    symbolic and is not bounded.
+    """
+    if not isinstance(exponent, sympy.Rational):
+        return
+    if not getattr(base, "is_number", False):
+        # SymPy distributes a power over a product and evaluates its numeric
+        # factors, so (x/2)**10000000000 builds 2**10000000000: bound the
+        # numeric part of the base; a symbol alone stays symbolic.
+        numeric = [factor for factor in sympy.Mul.make_args(base) if getattr(factor, "is_number", False)]
+        if not numeric:
+            return
+        base = sympy.Mul(*numeric)
+    if isinstance(base, sympy.Pow) and isinstance(base.base, sympy.Rational) and base.base > 0             and isinstance(base.exp, sympy.Rational):
+        # SymPy combines (b**e1)**e2 into b**(e1*e2) for a positive b, so
+        # (POW (POW 2 0.0001) 20000) is 2**2: bound the combined power.
+        base, exponent = base.base, base.exp * exponent
+    if base in (0, 1, -1):
+        return
+    whole = abs(exponent.p) // exponent.q
+    if whole > _MAX_POW_EXPONENT:
+        raise ValueError(
+            f"POW exponent exceeds the maximum magnitude of {_MAX_POW_EXPONENT}"
+        )
+    digits = _exact_size(base)
+    if digits * whole > _MAX_POW_EXPANSION_DIGITS:
+        raise ValueError("POW demands unbounded exact expansion")
+    if exponent.q != 1 and (digits > _MAX_ROOT_BASE_DIGITS or _digits(exponent.q) > _MAX_ROOT_DEGREE_DIGITS):
+        raise ValueError("POW asks for an exact root of a number too large to compute")
 
 
 def _is_quoted_literal(token: str) -> bool:
@@ -216,9 +285,10 @@ class Z3Compiler:
         # Atoms
         if isinstance(node, bool):
             return node
-        if isinstance(node, (int, float)):
+        if isinstance(node, (int, float, Fraction)):
             # A decimal literal is the exact value written (0.1 is 1/10), not
             # its binary float, so Python never adds two of them (GHSA-w73j).
+            # The parser reads it from its text as a Fraction (#636).
             return z3_exact.literal(node)
         if isinstance(node, str):
             # A quoted string literal is not a variable name. The parser keeps
@@ -376,6 +446,9 @@ class SymPyCompiler:
         Recursively compile AST node to SymPy expression.
         """
         # Atoms
+        if isinstance(node, Fraction):
+            # A decimal literal, exact as the parser read it (#636).
+            return sympy.Rational(node.numerator, node.denominator)
         if isinstance(node, (int, float)):
             return sympy.Number(node)
         if isinstance(node, bool):
@@ -412,6 +485,7 @@ class SymPyCompiler:
         elif operator == 'DIV':
             return compiled_args[0] / compiled_args[1]
         elif operator == 'POW':
+            _check_exact_pow_cost(compiled_args[0], compiled_args[1])
             return compiled_args[0] ** compiled_args[1]
         elif operator == 'MOD':
             return sympy.Mod(compiled_args[0], compiled_args[1])
