@@ -11,6 +11,7 @@ there anyway.
 """
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -123,7 +124,10 @@ def test_the_template_makes_each_copy_owner_only_before_it_is_filled_in():
     for copy in _header_commands("cp"):
         destination = copy.split()[-1]
         at = steps.index(copy)
-        uses = [i for i, step in enumerate(steps) if destination in step.split() or f"in {destination})" in step]
+        # The path anywhere in a step, quoted or after < or >, but not as
+        # part of a longer path.
+        path = re.compile(r"(?<![\w./-])" + re.escape(destination) + r"(?![\w./-])")
+        uses = [i for i, step in enumerate(steps) if path.search(step)]
         # Nothing uses the file before the copy, and the very next step
         # restricts it, so nothing reads or fills it in before that.
         assert uses[0] == at

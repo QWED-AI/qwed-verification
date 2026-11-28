@@ -20,8 +20,9 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   delete it. If you filled in the tracked `secret.yaml`, git will not pull
   while it has local changes, staged or not: save the working copy out of
   the checkout, readable only by you, and if you staged a different
-  version, save that too without printing it
-  (`(umask 077; git show :deploy/kubernetes/secret.yaml > ../qwed-secret.staged.yaml)`);
+  version, save that too without printing it, into a file made owner-only
+  before anything is written to it
+  (`install -m 600 /dev/null ../qwed-secret.staged.yaml && git show :deploy/kubernetes/secret.yaml > ../qwed-secret.staged.yaml`);
   then run
   `git restore --source=HEAD --staged --worktree deploy/kubernetes/secret.yaml`
   and pull. Git still ignores that path, but do not keep a filled-in copy
