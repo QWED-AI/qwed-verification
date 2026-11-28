@@ -5,6 +5,21 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Fixed
+
+- **Logic: a decimal literal is the value written** (#636). The DSL parser
+  read a decimal with `float()`, and `LogicVerifier`'s evaluator took it from
+  Python's parser as a float, so both rounded it before turning it into an
+  exact number: `0.10000000000000001` was `0.1`, `1e-400` was `0` and
+  `1e400` was not a number. `DSLLogicVerifier.prove_from_dsl` and
+  `LogicVerifier.prove_theorem` then proved `0.1 == 0.10000000000000001` and
+  refuted `1.00000000000000001 > 1`, and `verify_logic` called two different
+  decimals contradictory. A decimal is now read from its text as an exact
+  fraction, in the DSL and in `LogicVerifier`. `inf` and `nan` are refused, as
+  before, and so is a decimal whose exact value needs more than 4,000 digits
+  above or below the fraction line. The HTTP logic routes were not affected:
+  they refuse a decimal in the model's translation.
+
 ## [12.0.0] - 2026-11-28
 
 A major release that fixes one advisory reported from outside the project.

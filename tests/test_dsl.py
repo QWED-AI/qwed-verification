@@ -7,6 +7,7 @@ Run with: pytest tests/test_dsl.py -v
 import pytest
 import sys
 import os
+from fractions import Fraction
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -46,7 +47,7 @@ class TestDSLParser:
         """Test arithmetic: (MULT 0.15 200)"""
         result = self.parser.run("(MULT 0.15 200)")
         assert result['status'] == 'SUCCESS'
-        assert result['ast'] == ['MULT', 0.15, 200]
+        assert result['ast'] == ['MULT', Fraction(3, 20), 200]
     
     def test_complex_nested(self):
         """Test deeply nested expression."""
@@ -67,10 +68,10 @@ class TestDSLParser:
         assert result['ast'] == ['EQ', 'is_valid', True]
     
     def test_float_numbers(self):
-        """Test floating point numbers."""
+        """A decimal is the exact value written, not a binary float (#636)."""
         result = self.parser.run("(LT probability 0.95)")
         assert result['status'] == 'SUCCESS'
-        assert result['ast'][2] == 0.95
+        assert result['ast'][2] == Fraction(19, 20)
     
     # === SECURITY BLOCKS ===
     

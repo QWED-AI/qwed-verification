@@ -6,6 +6,7 @@ Compiles validated AST from the parser into Z3 constraints or SymPy expressions.
 
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from fractions import Fraction
 
 # Z3 imports (lazy to avoid import errors if Z3 not installed)
 try:
@@ -216,9 +217,10 @@ class Z3Compiler:
         # Atoms
         if isinstance(node, bool):
             return node
-        if isinstance(node, (int, float)):
+        if isinstance(node, (int, float, Fraction)):
             # A decimal literal is the exact value written (0.1 is 1/10), not
             # its binary float, so Python never adds two of them (GHSA-w73j).
+            # The parser reads it from its text as a Fraction (#636).
             return z3_exact.literal(node)
         if isinstance(node, str):
             # A quoted string literal is not a variable name. The parser keeps
@@ -376,6 +378,9 @@ class SymPyCompiler:
         Recursively compile AST node to SymPy expression.
         """
         # Atoms
+        if isinstance(node, Fraction):
+            # A decimal literal, exact as the parser read it (#636).
+            return sympy.Rational(node.numerator, node.denominator)
         if isinstance(node, (int, float)):
             return sympy.Number(node)
         if isinstance(node, bool):

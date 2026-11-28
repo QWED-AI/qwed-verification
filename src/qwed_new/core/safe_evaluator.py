@@ -22,9 +22,17 @@ class _ExactArithmetic(ast.NodeTransformer):
     """Route decimal literals and /, % and ** through z3_exact, so numbers are
     exact and one formula uses one arithmetic (GHSA-w73j)."""
 
+    def __init__(self, source: str) -> None:
+        self._source = source
+
     def visit_Constant(self, node: ast.Constant) -> ast.AST:
         if isinstance(node.value, float):
-            call = ast.Call(ast.Name(_EXACT_REAL, ast.Load()), [ast.Constant(repr(node.value))], [])
+            # The literal's own text: Python has already rounded the float,
+            # so 0.10000000000000001 reads as 0.1 and 1e-400 as 0.0 (#636).
+            text = ast.get_source_segment(self._source, node)
+            if text is None:
+                raise ValueError("The text of a decimal literal could not be read")
+            call = ast.Call(ast.Name(_EXACT_REAL, ast.Load()), [ast.Constant(text)], [])
             return ast.copy_location(call, node)
         return node
 
@@ -205,7 +213,7 @@ class SafeEvaluator:
         restricted_globals[_DIVIDE] = lambda left, right: z3_exact.divide(left, right, int_context)
         restricted_globals[_MODULO] = z3_exact.modulo
         restricted_globals[_POWER] = lambda base, exponent: z3_exact.power(base, exponent, int_context)
-        tree = ast.fix_missing_locations(_ExactArithmetic().visit(tree))
+        tree = ast.fix_missing_locations(_ExactArithmetic(stripped).visit(tree))
 
         try:
             # 4. Execute the validated AST in a restricted namespace
