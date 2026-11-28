@@ -57,7 +57,8 @@ def names_a_non_finite_number(text: str) -> bool:
 
 # A decimal in ASCII digits, the usual form, is read directly; any other form
 # (underscores, digits of other scripts, a NaN) goes through Decimal.
-_PLAIN = re.compile(r"([+-]?)([0-9]*)(?:\.([0-9]*))?(?:[eE]([+-]?[0-9]+))?")
+# re.ASCII: here \d is 0-9 only.
+_PLAIN = re.compile(r"([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?", re.ASCII)
 # An exponent with more digits than this is far beyond every bound.
 _MAX_EXPONENT_DIGITS = 18
 
