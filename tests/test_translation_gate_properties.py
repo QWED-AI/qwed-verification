@@ -9,6 +9,7 @@ is reached. Ordinary text that only shares words with a phrase must pass.
 """
 
 import base64
+import os
 import re
 import time
 import unicodedata
@@ -269,7 +270,7 @@ def test_a_run_of_invisible_characters_does_not_make_the_check_backtrack(whole_w
     pytest.param("\n- 1) " * 1666, id="list markers on every line"),
 ])
 @pytest.mark.parametrize("whole_words", [False, True])
-def test_a_phrase_that_never_completes_costs_about_what_plain_text_costs(crafted, whole_words):
+def test_a_phrase_that_never_completes_costs_at_most_ten_times_plain_text(crafted, whole_words):
     # Text that starts a phrase again and again and never completes one. A
     # search retried from every start once cost 20 to 70 times plain text
     # of the same length, all of it holding the GIL, so a thread would not
@@ -278,23 +279,32 @@ def test_a_phrase_that_never_completes_costs_about_what_plain_text_costs(crafted
     gateway = SecurityGateway()
     plain = ("dismissal " * 1000)[: len(crafted)]
 
+    # Integer nanoseconds of CPU time where that clock is fine-grained
+    # (Linux, macOS), so other work on a busy runner does not count (#674).
+    # On Windows the CPU clocks, like time.monotonic (GetTickCount64), tick
+    # every 15.6 ms, too coarse for a check that takes a few milliseconds,
+    # so it is perf_counter_ns there.
+    clock_ns = time.perf_counter_ns if os.name == "nt" else time.process_time_ns
+
     def elapsed_ns(text):
-        # Integer nanoseconds. perf_counter_ns, not monotonic_ns: on Windows
-        # time.monotonic is GetTickCount64, 15.6 ms a tick, too coarse for a
-        # check that takes a few milliseconds.
         # Each read is a first read: the cached copies and verdicts are
         # cleared, or every run after the first would time a lookup.
         _phrase_copies.cache_clear()
         _phrase_found.cache_clear()
-        started = time.perf_counter_ns()
+        started = clock_ns()
         assert gateway.detect_injection(text, whole_words=whole_words) == (True, None)
-        return time.perf_counter_ns() - started
+        return clock_ns() - started
 
     best = {crafted: elapsed_ns(crafted), plain: elapsed_ns(plain)}
     for _ in range(4):
         for text in (crafted, plain):
             best[text] = min(best[text], elapsed_ns(text))
-    assert best[crafted] < 5 * best[plain]
+    # Some of these texts cost up to about five times plain text on an idle
+    # machine, by design: each premise or aggregate is read to its
+    # sentence's end, so several reads cover the same characters. A bound
+    # of ten leaves room for a busy runner (#674), and a search retried
+    # from every start still breaks it.
+    assert best[crafted] < 10 * best[plain]
 
 
 @pytest.mark.parametrize("whole_words", [False, True])

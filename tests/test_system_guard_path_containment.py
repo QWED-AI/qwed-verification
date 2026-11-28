@@ -7,6 +7,7 @@ not inside it, and a link inside an allowed directory can name a file
 outside it.
 """
 
+import errno
 import os
 import shutil
 import stat
@@ -14,6 +15,7 @@ import tempfile
 import unicodedata
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from hypothesis import given, settings
@@ -106,8 +108,14 @@ def test_a_sibling_of_a_relative_allowed_directory_is_outside(tmp_path, monkeypa
     assert result["risk"] == "SANDBOX_ESCAPE"
 
 
-@pytest.mark.parametrize("path", ["/tmp-exfil/secret", "/tmpXYZ/anything", "/tmp" + ZERO_WIDTH_SPACE + "/x"])
-def test_the_default_tmp_does_not_admit_its_siblings(tmp_path, monkeypatch, path):
+@pytest.mark.parametrize("path", [
+    "/tmp/report.txt", "/tmp", "/tmp/", "//tmp/report.txt", "/tmp/./report.txt", "/TMP/report.txt",
+    "/var/tmp/report.txt", "/dev/shm/report.txt",
+    "/tmp-exfil/secret", "/tmpXYZ/anything", "/tmp" + ZERO_WIDTH_SPACE + "/x",
+])
+def test_the_defaults_do_not_allow_tmp(tmp_path, monkeypatch, path):
+    # Every user of the machine can write to /tmp, so a file there may be
+    # someone else's: it is not a default.
     monkeypatch.chdir(tmp_path)
 
     result = SystemGuard().verify_file_access(path)
@@ -117,8 +125,7 @@ def test_the_default_tmp_does_not_admit_its_siblings(tmp_path, monkeypatch, path
 
 
 def test_a_sibling_of_the_working_directory_is_outside_dot(tmp_path, monkeypatch):
-    # "." as in the defaults; named here because on Linux tmp_path is inside
-    # the default "/tmp", which rightly allows the sibling.
+    # "." as in the defaults, named so that the test does not depend on them.
     project = tmp_path / "proj"
     project.mkdir()
     secrets = tmp_path / "proj-secrets"
@@ -1232,11 +1239,306 @@ def test_paths_inside_are_allowed(tmp_path, monkeypatch, workspace):
         assert result["verified"] is True, path
 
 
-@pytest.mark.skipif(os.path.islink("/tmp"), reason="/tmp is a link here (macOS): a linked directory is not used")
-def test_the_default_tmp_still_allows_its_own_files(tmp_path, monkeypatch):
+@pytest.mark.skipif(os.name == "nt" or os.path.islink("/tmp"),
+                    reason="no /tmp on Windows; /tmp is a link here (macOS): a linked directory is not used")
+def test_a_named_tmp_still_allows_its_own_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    assert SystemGuard().verify_file_access("/tmp/report.txt")["verified"] is True
+    assert SystemGuard(allowed_paths=["/tmp"]).verify_file_access("/tmp/report.txt")["verified"] is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
+def test_no_default_is_used_under_a_directory_every_user_can_write(tmp_path, monkeypatch):
+    # A shared directory, as /tmp is: another user could have made the
+    # working directory's workspace, or could make it while it is missing,
+    # and put files there. A caller who names a directory decides.
+    shared = tmp_path / "shared"
+    workspace = shared / "workspace"
+    private = shared / ".ssh" / "work"
+    workspace.mkdir(parents=True)
+    private.mkdir(parents=True)
+    shared.chmod(0o1777)
+    workspace.chmod(0o755)
+    private.chmod(0o700)
+
+    monkeypatch.chdir(shared)
+    by_default = SystemGuard()
+    for path in ["report.txt", "workspace/report.txt", "workspace/new/report.txt"]:
+        assert by_default.verify_file_access(path)["risk"] == "SANDBOX_ESCAPE", path
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("report.txt")["verified"] is True
+    assert SystemGuard(allowed_paths=["./workspace"]).verify_file_access("workspace/report.txt")["verified"] is True
+
+    # A private working directory below it is no default either, also where
+    # a forbidden folder sits between the two.
+    monkeypatch.chdir(private)
+    assert SystemGuard().verify_file_access("notes.txt")["risk"] == "SANDBOX_ESCAPE"
+
+
+def test_a_default_another_user_could_have_made_is_not_used(tmp_path, monkeypatch):
+    # The rule applies to the defaults only, and on every system.
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    cwd = os.path.realpath(".")
+    monkeypatch.setattr(system_guard, "_open_to_others", lambda path: os.path.normcase(path) == os.path.normcase(cwd))
+
+    assert SystemGuard().verify_file_access("report.txt")["risk"] == "SANDBOX_ESCAPE"
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("report.txt")["verified"] is True
+    # The default ./workspace is still used when it is not open to others.
+    assert SystemGuard().verify_file_access("workspace/report.txt")["verified"] is True
+
+
+def test_open_to_others_reads_the_mode_bits_up_to_the_root(monkeypatch):
+    leaf = os.path.join(os.sep, "srv", "app", "proj")
+    parent = os.path.dirname(leaf)
+    modes = {}
+
+    def fake_stat(path, *args, **kwargs):
+        mode = modes.get(os.fspath(path), 0o755)
+        if isinstance(mode, Exception):
+            raise mode
+        return SimpleNamespace(st_mode=stat.S_IFDIR | mode)
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", False)
+    cases = [
+        ({}, False),
+        ({leaf: 0o775}, False),
+        ({leaf: 0o777}, True),
+        ({leaf: 0o703}, True),
+        ({parent: 0o1777}, True),
+        ({parent: 0o777}, True),
+        ({os.path.dirname(parent): 0o1777}, True),
+        ({leaf: FileNotFoundError(2, "missing")}, True),
+        ({leaf: NotADirectoryError(20, "not a directory")}, True),
+        ({parent: PermissionError(13, "denied")}, True),
+    ]
+    for case, expected in cases:
+        modes.clear()
+        modes.update(case)
+        assert system_guard._open_to_others(leaf) is expected, case
+
+    # Windows: the mode bits do not say who may write, so only a missing or
+    # unreadable directory counts.
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", True)
+    for case, expected in [({leaf: 0o777}, False), ({parent: 0o1777}, False),
+                           ({leaf: FileNotFoundError(2, "missing")}, True), ({parent: PermissionError(13, "denied")}, True)]:
+        modes.clear()
+        modes.update(case)
+        assert system_guard._open_to_others(leaf) is expected, case
+
+
+def test_a_missing_default_workspace_is_not_used(monkeypatch):
+    # End to end, with nothing stubbed: at a file system root the default "."
+    # is not used, so only a missing ./workspace could allow the path, and
+    # another user could make it.
+    root = os.path.abspath(os.sep)
+    if os.path.exists(os.path.join(root, "workspace")):
+        pytest.skip("a workspace folder exists at the file system root here")
+    monkeypatch.chdir(root)
+    target = os.path.join(root, "workspace", "report.txt")
+
+    assert SystemGuard().verify_file_access(target)["risk"] == "SANDBOX_ESCAPE"
+    # Named, a missing directory still counts, as before.
+    assert SystemGuard(allowed_paths=["./workspace"]).verify_file_access(target)["verified"] is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
+def test_a_path_below_a_default_through_a_shared_directory_is_refused(tmp_path, monkeypatch):
+    # Only what lies below the defaults is read here: tmp_path may itself sit
+    # under /tmp, which the test above covers.
+    monkeypatch.setattr(system_guard, "_open_to_others", lambda path: False)
+    project = tmp_path / "proj"
+    drop = project / "notes" / "drop"
+    drop.mkdir(parents=True)
+    (project / "workspace").mkdir()
+    project.chmod(0o755)
+    (project / "notes").chmod(0o755)
+    drop.chmod(0o1777)
+    (project / "workspace").chmod(0o777)
+    monkeypatch.chdir(project)
+    by_default = SystemGuard()
+
+    for path in ["workspace", "workspace/secret.txt", "notes/drop", "notes/drop/x.txt", "notes/drop/new/x.txt"]:
+        assert by_default.verify_file_access(path)["risk"] == "SANDBOX_ESCAPE", path
+    for path in ["report.txt", "notes/x.txt", "notes/new/dir/x.txt"]:
+        assert by_default.verify_file_access(path)["verified"] is True, path
+    # A caller who names the directory decides.
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("workspace/secret.txt")["verified"] is True
+
+
+def test_shared_below_reads_each_directory_between(monkeypatch):
+    root = os.path.join(os.sep, "srv", "proj")
+    first = os.path.join(root, "a")
+    second = os.path.join(first, "b")
+    path = os.path.join(second, "file.txt")
+    modes = {}
+
+    def fake_stat(target, *args, **kwargs):
+        mode = modes.get(os.fspath(target))
+        if mode is None:
+            raise FileNotFoundError(2, "missing")
+        return SimpleNamespace(st_mode=mode)
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", False)
+    folder, plain = stat.S_IFDIR, stat.S_IFREG
+    cases = [
+        ({first: folder | 0o755, second: folder | 0o755, path: plain | 0o644}, False),
+        ({first: folder | 0o755, second: folder | 0o777, path: plain | 0o644}, True),
+        ({first: folder | 0o1777, second: folder | 0o755, path: plain | 0o644}, True),
+        # A file's own bits are not read.
+        ({first: folder | 0o755, second: folder | 0o755, path: plain | 0o666}, False),
+        # What is not there yet is the caller's to make.
+        ({first: folder | 0o755}, False),
+        # The default itself is read before, when the roots are chosen.
+        ({root: folder | 0o777, first: folder | 0o755, second: folder | 0o755, path: plain | 0o644}, False),
+    ]
+    for case, expected in cases:
+        modes.clear()
+        modes.update(case)
+        assert system_guard._shared_below(root, path) is expected, case
+    assert system_guard._shared_below(root, root) is False
+
+    # A mode that cannot be read refuses the path; what is not there, or sits
+    # below a file, does not.
+    errors = {}
+
+    def failing_stat(target, *args, **kwargs):
+        error = errors.get(os.fspath(target))
+        if error is not None:
+            raise error
+        return fake_stat(target)
+
+    monkeypatch.setattr(os, "stat", failing_stat)
+    plain_dirs = {first: folder | 0o755, second: folder | 0o755, path: plain | 0o644}
+    error_cases = [
+        ({second: PermissionError(errno.EACCES, "denied")}, True),
+        ({path: PermissionError(errno.EACCES, "denied")}, True),
+        ({first: OSError(errno.EIO, "I/O error")}, True),
+        ({path: OSError(errno.ELOOP, "loop")}, True),
+        ({path: OSError(errno.ENAMETOOLONG, "too long")}, True),
+        ({path: NotADirectoryError(errno.ENOTDIR, "not a directory")}, False),
+        ({second: FileNotFoundError(errno.ENOENT, "missing")}, False),
+    ]
+    for case, expected in error_cases:
+        modes.clear()
+        modes.update(plain_dirs)
+        errors.clear()
+        errors.update(case)
+        assert system_guard._shared_below(root, path) is expected, case
+    errors.clear()
+
+    monkeypatch.setattr(system_guard, "_ON_WINDOWS", True)
+    modes.clear()
+    modes.update({first: folder | 0o777})
+    errors.update({path: PermissionError(errno.EACCES, "denied")})
+    assert system_guard._shared_below(root, path) is False
+
+
+_STAT_OUTCOMES = st.one_of(
+    st.sampled_from(["missing", "not a directory", "denied", "io", "loop"]),
+    st.tuples(st.booleans(), st.integers(min_value=0, max_value=0o7777)),
+)
+
+
+@settings(max_examples=300, deadline=None)
+@given(outcomes=st.lists(_STAT_OUTCOMES, min_size=1, max_size=4))
+def test_shared_below_refuses_exactly_a_shared_or_unread_directory(outcomes):
+    # Each outcome is what os.stat gives for one part below the default, from
+    # the path itself upwards: an error, or (is a directory, mode bits).
+    root = os.path.join(os.sep, "srv", "proj")
+    parts = [os.path.join(root, *("d%d" % k for k in range(depth + 1))) for depth in range(len(outcomes))]
+    by_path = dict(zip(reversed(parts), outcomes))
+    raised = {
+        "missing": FileNotFoundError(errno.ENOENT, "missing"),
+        "not a directory": NotADirectoryError(errno.ENOTDIR, "not a directory"),
+        "denied": PermissionError(errno.EACCES, "denied"),
+        "io": OSError(errno.EIO, "I/O error"),
+        "loop": OSError(errno.ELOOP, "loop"),
+    }
+
+    def fake_stat(target, *args, **kwargs):
+        outcome = by_path[os.fspath(target)]
+        if isinstance(outcome, str):
+            raise raised[outcome]
+        is_dir, bits = outcome
+        return SimpleNamespace(st_mode=(stat.S_IFDIR if is_dir else stat.S_IFREG) | bits)
+
+    expected = any(
+        outcome in ("denied", "io", "loop")
+        or (not isinstance(outcome, str) and outcome[0] and outcome[1] & stat.S_IWOTH)
+        for outcome in outcomes
+    )
+    with mock.patch.object(system_guard, "_ON_WINDOWS", False), mock.patch.object(os, "stat", fake_stat):
+        assert system_guard._shared_below(root, parts[-1]) is expected
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads every mode")
+def test_a_path_below_a_default_that_cannot_be_checked_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_guard, "_open_to_others", lambda path: False)
+    project = tmp_path / "proj"
+    locked = project / "locked"
+    (locked / "inner").mkdir(parents=True)
+    (project / "report.txt").write_text("x")
+    project.chmod(0o755)
+    monkeypatch.chdir(project)
+    by_default = SystemGuard()
+    locked.chmod(0o000)
+    try:
+        # The walk over the parts refuses these first (INVALID_PATH); the mode
+        # check refuses on its own when only it cannot read a part (above).
+        for path in ["locked/inner", "locked/inner/x.txt", "locked/x.txt"]:
+            assert by_default.verify_file_access(path)["verified"] is False, path
+        # A file on the way is not a directory anyone could put things in.
+        assert by_default.verify_file_access("report.txt/x")["verified"] is True
+        # Named, the walk still refuses a part it cannot read, as on main.
+        assert SystemGuard(allowed_paths=["."]).verify_file_access("locked/x.txt")["verified"] is False
+    finally:
+        locked.chmod(0o755)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows mode bits do not say who may write")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads every mode")
+def test_a_mode_that_cannot_be_read_after_the_walk_refuses_the_path(tmp_path, monkeypatch):
+    # The walk over the parts passes; the directory is then locked before the
+    # mode check reads it, as a change between the two reads would do. Only
+    # the mode check can refuse here, with real permissions and os.stat.
+    monkeypatch.setattr(system_guard, "_open_to_others", lambda path: False)
+    project = tmp_path / "proj"
+    locked = project / "locked"
+    (locked / "inner").mkdir(parents=True)
+    project.chmod(0o755)
+    monkeypatch.chdir(project)
+    checked = []
+    real_shared_below = system_guard._shared_below
+
+    def lock_then_check(root, path):
+        checked.append(path)
+        locked.chmod(0o000)
+        try:
+            return real_shared_below(root, path)
+        finally:
+            locked.chmod(0o755)
+
+    monkeypatch.setattr(system_guard, "_shared_below", lock_then_check)
+    by_default = SystemGuard()
+
+    for path in ["locked/inner", "locked/inner/x.txt", "locked/x.txt"]:
+        assert by_default.verify_file_access(path)["risk"] == "SANDBOX_ESCAPE", path
+    assert checked, "the mode check did not run"
+    # The locked directory's own mode can be read, and it is not shared.
+    assert by_default.verify_file_access("locked")["verified"] is True
+    # A caller who names the directory decides: the mode check does not run.
+    checked.clear()
+    assert SystemGuard(allowed_paths=["."]).verify_file_access("locked/x.txt")["verified"] is True
+    assert checked == []
+
+
+def test_the_defaults_are_workspace_and_the_working_directory():
+    assert SystemGuard.DEFAULT_ALLOWED_PATHS == ["./workspace", "."]
+    assert SystemGuard().allowed_paths == ["./workspace", "."]
 
 
 def test_the_readme_example_is_still_refused_as_a_forbidden_path():

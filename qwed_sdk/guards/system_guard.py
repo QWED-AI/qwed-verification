@@ -272,6 +272,54 @@ def _is_windows_special(path: str) -> bool:
     )
 
 
+def _open_to_others(path: str) -> bool:
+    """
+    Another user may have made ``path``, or may put files in it: it, or a
+    directory above it, can be written by every user (as /tmp can), it is
+    not there, or it or a directory above it cannot be read. Only the mode
+    bits are read, not access control lists; on Windows, where the mode
+    bits do not say who may write, only the last two count.
+    """
+    current = path
+    while True:
+        try:
+            mode = os.stat(current).st_mode
+        except OSError:
+            return True
+        if not _ON_WINDOWS and mode & stat.S_IWOTH:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
+def _shared_below(root: str, path: str) -> bool:
+    """
+    ``path``, or a directory between it and ``root`` (both resolved, ``root``
+    not counted), is a directory every user can write to, so another user
+    may have put what is there, or its mode cannot be read. What is not
+    there does not count, and only the mode bits of what is there are read;
+    never on Windows, where the mode bits do not say who may write.
+    """
+    if _ON_WINDOWS:
+        return False
+    current = path
+    while current != root and _is_inside(root, current):
+        try:
+            mode = os.stat(current).st_mode
+        except (FileNotFoundError, NotADirectoryError):
+            # Not there, or a file is on the way: nothing anyone put.
+            mode = 0
+        except OSError:
+            # Not read (no permission, a loop, an I/O error): refuse.
+            return True
+        if stat.S_ISDIR(mode) and mode & stat.S_IWOTH:
+            return True
+        current = os.path.dirname(current)
+    return False
+
+
 def _starts_at_home(path: str) -> bool:
     """
     "~", or a first part that starts with "~" followed by more parts: a shell
@@ -314,8 +362,10 @@ class SystemGuard:
         r"\.pem$",                      # SSL certificates
     ]
 
-    # Directories a file path may be in when the caller names none
-    DEFAULT_ALLOWED_PATHS = ["/tmp", "./workspace", "."]
+    # Directories a file path may be in when the caller names none. Not
+    # /tmp: every user of the machine can write there, so a file in it may
+    # be someone else's.
+    DEFAULT_ALLOWED_PATHS = ["./workspace", "."]
     
     def __init__(
         self,
@@ -458,8 +508,17 @@ class SystemGuard:
         is one inside another allowed directory with a link between them.
         Links in the parents of an allowed directory, outside every allowed
         directory, are followed: they are the caller's own setup.
-        When the caller names no allowed directories, the default "." is
-        not used while the working directory is the root of a file system.
+        When the caller names no allowed directories, the defaults are
+        "./workspace" and ".". The default "." is not used while the working
+        directory is the root of a file system, and neither default is used
+        when it is missing or cannot be read, or when it or a directory
+        above it can be written by every user (anything under /tmp, say):
+        another user could have made it, or could put files in it. Only the
+        mode bits are read, not access control lists, and on Windows, where
+        they do not say who may write, only a missing or unreadable default
+        is left out. Outside Windows, a path below a default is refused when
+        a directory on its way can be written by every user, or its mode
+        cannot be read. Name a directory to allow it.
 
         The answer holds for the file system at the time of the call. A link
         changed after the check can point elsewhere, and a hard link is the
@@ -518,6 +577,10 @@ class SystemGuard:
         holding = [resolved for _, resolved in roots if _is_inside(resolved, real_path)]
         if not holding:
             return self._sandbox_escape(filepath)
+        if self._default_allowed_paths and any(_shared_below(root, real_path) for root in holding):
+            # Below a default, a directory every user can write to is not the
+            # caller's choice: another user may have put what is there.
+            return self._sandbox_escape(filepath)
         if any(self._forbidden_below(root, real_path) for root in holding):
             return self._forbidden_path()
 
@@ -553,7 +616,8 @@ class SystemGuard:
         A directory whose last part is a link or a junction is not used:
         whoever can replace the link decides where it points. Nor is one
         inside another allowed directory with a link between the two, since
-        whoever can write the outer directory can make that link.
+        whoever can write the outer directory can make that link. Nor is a
+        default directory another user could have made or could write to.
         """
         entries = []
         for allowed_dir in self.allowed_paths:
@@ -572,6 +636,7 @@ class SystemGuard:
             for written, resolved, in_place in entries
             if in_place
             and not self._default_at_filesystem_root(written, resolved)
+            and not (self._default_allowed_paths and _open_to_others(resolved))
             and self._nested_in_place(written, resolved, entries)
         ]
 
