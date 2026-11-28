@@ -298,9 +298,9 @@ def _shared_below(root: str, path: str) -> bool:
     """
     ``path``, or a directory between it and ``root`` (both resolved, ``root``
     not counted), is a directory every user can write to, so another user
-    may have put what is there. Only directories that are there count, and
-    only their mode bits; never on Windows, where the mode bits do not say
-    who may write.
+    may have put what is there, or its mode cannot be read. What is not
+    there does not count, and only the mode bits of what is there are read;
+    never on Windows, where the mode bits do not say who may write.
     """
     if _ON_WINDOWS:
         return False
@@ -308,8 +308,12 @@ def _shared_below(root: str, path: str) -> bool:
     while current != root and _is_inside(root, current):
         try:
             mode = os.stat(current).st_mode
-        except OSError:
+        except (FileNotFoundError, NotADirectoryError):
+            # Not there, or a file is on the way: nothing anyone put.
             mode = 0
+        except OSError:
+            # Not read (no permission, a loop, an I/O error): refuse.
+            return True
         if stat.S_ISDIR(mode) and mode & stat.S_IWOTH:
             return True
         current = os.path.dirname(current)
@@ -513,8 +517,8 @@ class SystemGuard:
         mode bits are read, not access control lists, and on Windows, where
         they do not say who may write, only a missing or unreadable default
         is left out. Outside Windows, a path below a default is refused when
-        a directory on its way can be written by every user. Name a
-        directory to allow it.
+        a directory on its way can be written by every user, or its mode
+        cannot be read. Name a directory to allow it.
 
         The answer holds for the file system at the time of the call. A link
         changed after the check can point elsewhere, and a hard link is the
