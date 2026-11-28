@@ -602,7 +602,7 @@ def test_the_action_fails_on_a_connection_string_and_passes_on_a_variable(monkey
 @pytest.mark.parametrize("name", [
     ".github/workflows/ci.yml",
     ".github/workflows/docker-images.yml",
-    "deploy/kubernetes/secret.yaml",
+    "deploy/kubernetes/secret.yaml.example",
     "deploy/.env.example",
 ])
 def test_the_repository_writes_database_passwords_as_variables(name):

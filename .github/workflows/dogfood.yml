@@ -23,11 +23,13 @@ jobs:
       - name: Scan for API keys and tokens
         # The Action as this commit has it, so the job also tests a change to
         # the Action. The repository's own config has no finding, so any
-        # finding fails the job.
+        # finding fails the job. The list covers the Action's default
+        # patterns, plus the deployment templates, which end in .example
+        # (#182).
         uses: ./
         with:
           action: scan-secrets
-          paths: "**/*.env,**/*.json,**/*.yaml,**/*.yml"
+          paths: "**/*.env,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.ini,deploy/**/*.example"
           fail_on_findings: "true"
 
   scan-code:

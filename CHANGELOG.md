@@ -5,6 +5,33 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Changed
+
+- **Kubernetes: the Secret template is `deploy/kubernetes/secret.yaml.example`**
+  (#182). `secret.yaml` was tracked although `.gitignore` ignores it, so the
+  rule protected nothing: a filled-in copy was committed like any other
+  change. `kubectl apply -f deploy/kubernetes/` does not apply the template,
+  whose name does not end in `.yaml`. Copy it outside the checkout with
+  `cp -n`, make the copy readable only by you (`chmod 600`), fill it in
+  there and apply it after the directory, as the template's header shows:
+  this repository never commits a copy outside its checkout (keep it out of
+  any other repository as well), and switching releases does not touch it.
+  A cluster that has the Secret keeps it, since `kubectl apply` does not
+  delete it. If you filled in the tracked `secret.yaml`, git will not pull
+  while it has local changes, staged or not. First save your values
+  outside the checkout, where only you can read them, without overwriting
+  an earlier backup: the working copy, and a staged version if it differs
+  (`git show :deploy/kubernetes/secret.yaml` writes it to standard output,
+  so redirect it into such a file rather than to the terminal). Then run
+  `git restore --source=HEAD --staged --worktree deploy/kubernetes/secret.yaml`
+  and pull. Git still ignores that path, but do not keep a filled-in copy
+  there if you check out older releases: they track it with empty values,
+  and git overwrites an ignored file that the checked-out release tracks
+  (`git checkout --no-overwrite-ignore` refuses instead). A test now fails
+  when the repository tracks a file its `.gitignore` ignores, and the
+  repository's own secret scan also reads the deployment templates and TOML
+  and INI files.
+
 ### Fixed
 
 - **Logic: a decimal literal is the value written** (#636). The DSL parser
