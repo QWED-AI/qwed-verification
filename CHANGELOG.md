@@ -163,12 +163,12 @@ entry above or below.
     string raises `TypeError`, and an entry that is not a path, or holds
     NUL, raises `TypeError` or `ValueError` when the guard is made.
   - `/tmp` is no longer a default, and a default is not used when it is
-    missing, or under a directory every user can write to (a working
-    directory under `/tmp`, say); nor is a path below a default through
-    such a directory, or one whose mode cannot be read. Name the
-    directory in `allowed_paths` to allow it. On macOS `/tmp` is a link to `/private/tmp`, and an allowed
-    directory that is a link or a junction is not used; name
-    `/private/tmp`.
+    missing or cannot be read, or under a directory every user can write
+    to (a working directory under `/tmp`, say); nor is a path below a
+    default through such a directory, or one whose mode cannot be read.
+    Name the directory in `allowed_paths` to allow it. On macOS `/tmp` is
+    a link to `/private/tmp`, and an allowed directory that is a link or a
+    junction is not used; name `/private/tmp`.
   - On Windows, `con.py`, `aux.c` and `nul.txt` are refused, and names with
     `?`, `*`, `<`, `>`, `|` or `"`, or a part longer than 255 characters,
     are `INVALID_PATH`. On Linux a part longer than 255 bytes, or a path of
