@@ -32,6 +32,16 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   by its combined exponent, and so are the numeric factors of a product with
   a variable, such as the 1/2 of x/2. Integer bases had no bound in this
   compiler before. A variable's own power stays symbolic.
+- **Kubernetes: the ConfigMap names no model.** `deploy/kubernetes/configmap.yaml`
+  set `AZURE_OPENAI_DEPLOYMENT` to `gpt-4`, although QWED names no model of
+  its own. The value is now empty, and the Azure OpenAI provider stops and
+  says to set it until you name your deployment. A test checks that no file
+  under `deploy/` names a model.
+- **Dependabot updates the CrossHair sandbox image** (#184). Its docker entry
+  read only the root `Dockerfile`, so `docker/crosshair-sandbox/Dockerfile`,
+  which uses the same base image, was left behind. The entry reads both
+  directories now, in one group, and a test checks that every Dockerfile in
+  the repository is covered.
 
 ## [12.0.0] - 2026-11-28
 
