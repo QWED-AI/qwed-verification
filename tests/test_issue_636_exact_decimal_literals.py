@@ -41,6 +41,23 @@ def logic():
     return LogicVerifier()
 
 
+@pytest.fixture(autouse=True)
+def python_default_int_limit():
+    """Python's default limit for an integer read from or written as text
+    (4,300 digits) for each test here, whatever the environment set: the
+    tests check the bounds at their edges, not the environment. Tests of a
+    lower limit set it themselves."""
+    if not hasattr(sys, "set_int_max_str_digits"):
+        yield
+        return
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    try:
+        yield
+    finally:
+        sys.set_int_max_str_digits(previous)
+
+
 # --- the value of a literal -------------------------------------------------
 
 
@@ -191,16 +208,8 @@ def test_the_process_limit_for_integer_text_lowers_the_bound():
         ("5555555555e-4005", False),
         # A 4,001-digit even coefficient over 10 reduces to 4,000 digits over 5.
         # Written as text, not str(int): a lower int text limit must not stop
-        # the file being collected. Under such a limit int() cannot read the
-        # coefficient, so the value is refused, as the limit asks.
-        pytest.param(
-            "1" + "0" * 3999 + "2e-1",
-            True,
-            marks=pytest.mark.skipif(
-                hasattr(sys, "get_int_max_str_digits") and 0 < sys.get_int_max_str_digits() < 4001,
-                reason="needs an int text limit of at least 4,001 digits",
-            ),
-        ),
+        # the file being collected.
+        ("1" + "0" * 3999 + "2e-1", True),
         ("1" + "0" * 3999 + "1e-1", False),
     ],
 )
