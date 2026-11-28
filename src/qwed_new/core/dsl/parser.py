@@ -7,12 +7,12 @@ S-expression logic format. It replaces unsafe eval() with structured parsing.
 Format: (AND (GT x 5) (LT y 10))
 """
 
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
 
-from qwed_new.core.decimal_literal import exact_decimal
+from qwed_new.core.decimal_literal import exact_decimal, reads_as_decimal
 
 
 class OperatorCategory(str, Enum):
@@ -201,7 +201,7 @@ class QWEDLogicDSL:
             # Atom (variable, number, or boolean)
             return self._parse_atom(token), tokens[1:]
     
-    def _parse_atom(self, token: str) -> Union[int, Fraction, bool, str]:
+    def _parse_atom(self, token: str) -> int | Fraction | bool | str:
         """
         Parse an atomic token (number, boolean, or variable name).
 
@@ -222,10 +222,13 @@ class QWEDLogicDSL:
         # A decimal: read from its text, not as a float, which would round
         # 0.10000000000000001 to 0.1 before anything sees it (#636). A token
         # Python reads as a number stays a number, so ``inf`` and ``nan`` are
-        # refused rather than taken as variable names.
+        # refused rather than taken as variable names; so is ``sNaN``, which
+        # only the decimal grammar reads.
         try:
             float(token)
         except ValueError:
+            if reads_as_decimal(token):
+                raise ValueError(f"Not a finite number: {token[:40]!r}") from None
             # It's a variable name or operator
             return token
         return exact_decimal(token)

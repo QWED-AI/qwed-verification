@@ -7,6 +7,8 @@ before the exact conversion: ``0.10000000000000001`` became ``0.1``,
 ``LogicVerifier.prove_theorem`` then proved ``0.1 == 0.10000000000000001``
 and refuted ``1.00000000000000001 > 1``.
 """
+import ast
+import sys
 import time
 from fractions import Fraction
 
@@ -16,8 +18,11 @@ from hypothesis import strategies as st
 from z3 import Real, RealVal, is_false, is_true, simplify
 
 from qwed_new.core import z3_exact
-from qwed_new.core.decimal_literal import MAX_DECIMAL_DIGITS, exact_decimal
+from qwed_new.core.decimal_literal import MAX_DECIMAL_DIGITS, MAX_DECIMAL_TEXT, exact_decimal, reads_as_decimal
+from qwed_new.core.dsl import parse_and_validate as parse_dsl
+from qwed_new.core.dsl.compiler import SymPyCompiler
 from qwed_new.core.dsl.parser import QWEDLogicDSL, parse_and_validate
+from qwed_new.core.safe_evaluator import _ExactArithmetic
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 from qwed_new.core.logic_verifier import LogicVerifier
 from qwed_new.core.safe_evaluator import SafeEvaluator
@@ -55,7 +60,7 @@ def logic():
         ("-0.0", Fraction(0)),
         ("1_000.5", Fraction(2001, 2)),
         # Python reads other scripts' digits as numbers; the value is exact.
-        ("１.５", Fraction(3, 2)),
+        ("\uff11.\uff15", Fraction(3, 2)),
     ],
 )
 def test_a_decimal_is_the_value_written(text, expected):
@@ -78,7 +83,70 @@ def test_names_stay_names(text):
 
 def test_an_integer_stays_an_int():
     atom = QWEDLogicDSL()._parse_atom("10")
-    assert atom == 10 and type(atom) is int
+    assert atom == 10
+    assert type(atom) is int
+
+
+@pytest.mark.parametrize("text", ["sNaN", "-sNaN", "snan", "+sNaN"])
+def test_a_signalling_nan_is_refused_not_taken_as_a_name(text):
+    # float() does not read sNaN, but the decimal grammar does.
+    assert reads_as_decimal(text)
+    with pytest.raises(ValueError):
+        exact_decimal(text)
+    assert parse_and_validate(f"(GT x {text})")["status"] == "PARSE_ERROR"
+
+
+@pytest.mark.parametrize("text", ["x", "rate", "e", "E5", "nan_count", "_1x"])
+def test_a_name_is_not_a_decimal(text):
+    assert not reads_as_decimal(text)
+
+
+@pytest.mark.parametrize("text", ["abc", "", "1.2.3", "0x10"])
+def test_text_that_is_not_a_number_is_refused(text):
+    with pytest.raises(ValueError):
+        exact_decimal(text)
+
+
+def test_a_value_that_is_not_text_is_refused():
+    with pytest.raises(ValueError):
+        exact_decimal(None)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Zeros at the end of the coefficient cancel before the size check.
+        ("1" + "0" * 5000 + "e-5000", Fraction(1)),
+        ("10e-4000", Fraction(1, 10**3999)),
+        ("0e999999999", Fraction(0)),
+        ("0.000", Fraction(0)),
+        ("-0e-999999999", Fraction(0)),
+    ],
+)
+def test_zeros_that_cancel_do_not_count(text, expected):
+    assert exact_decimal(text) == expected
+
+
+def test_text_longer_than_the_bound_is_refused_before_it_is_read():
+    start = time.monotonic()
+    with pytest.raises(ValueError):
+        exact_decimal("1" * (MAX_DECIMAL_TEXT + 1))
+    with pytest.raises(ValueError):
+        exact_decimal("1" * 10_000_000)
+    assert time.monotonic() - start < 2
+
+
+@pytest.mark.skipif(not hasattr(sys, "set_int_max_str_digits"), reason="Python 3.11 and later")
+def test_the_process_limit_for_integer_text_lowers_the_bound():
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(640)
+    try:
+        with pytest.raises(ValueError):
+            exact_decimal("1e-700")
+        assert exact_decimal("1e-600") == Fraction(1, 10**600)
+        assert simplify(z3_exact.exact_real("1e-600")).eq(RealVal(f"1/{10**600}"))
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 
 @pytest.mark.parametrize(
@@ -223,7 +291,8 @@ _DECIMALS = st.builds(
 
 def _near(text: str, tail: str) -> str:
     """``text`` with digits added at the end of its fraction: a different
-    value that a float often cannot tell from it."""
+    value that a float often cannot tell from it or, with the tail "0", the
+    same value written longer."""
     if "e" in text:
         mantissa, exponent = text.split("e")
         return f"{mantissa}{tail}e{exponent}"
@@ -255,3 +324,61 @@ def test_safe_eval_decides_exactly_the_true_comparisons(pair):
     for operator, expected in (("==", Fraction(left) == Fraction(right)), (">", Fraction(left) > Fraction(right))):
         decided = simplify(evaluator.safe_eval(f"{left} {operator} {right}", {}))
         assert is_true(decided) if expected else is_false(decided)
+
+
+# --- SafeEvaluator reads each literal once ------------------------------------
+
+
+def test_many_decimals_are_read_in_linear_time():
+    formula = "And(" + ", ".join(f"x != {i}.{i:05d}1" for i in range(2000)) + ")"
+    start = time.monotonic()
+    SafeEvaluator().safe_eval(formula, {"x": Real("x")})
+    assert time.monotonic() - start < 5
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_a_literal_on_a_later_line_keeps_its_text(newline):
+    formula = f"And(x != 1,{newline}x == 0.10000000000000001)"
+    expr = SafeEvaluator().safe_eval(formula, {"x": Real("x")})
+    second = expr.arg(1)
+    assert any(side.eq(RealVal("10000000000000001/100000000000000000")) for side in _sides(second))
+
+
+def test_a_literal_after_a_non_ascii_name_keeps_its_text():
+    # The AST counts bytes; "\u00e9" takes two in UTF-8.
+    name = "\u00e9t\u00e9"
+    expr = SafeEvaluator().safe_eval(f"{name} == 0.10000000000000001", {name: Real(name)})
+    assert any(side.eq(RealVal("10000000000000001/100000000000000000")) for side in _sides(expr))
+
+
+def test_a_float_node_without_a_position_is_refused():
+    with pytest.raises(ValueError):
+        _ExactArithmetic("x").visit(ast.Constant(0.5))
+
+
+# --- the SymPy compiler bounds exact powers -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        "(GT (POW 9.0 1e1000) 1)",
+        "(GT (POW 0.5 10000000000) 0)",
+        "(GT (POW 9 (POW 9 9)) 1)",
+        "(GT (POW 1.5 10001) 1)",
+        "(GT (POW (POW 9.0 10000.0) 10000.0) 1)",
+    ],
+)
+def test_a_huge_exact_power_is_refused_quickly(program):
+    start = time.monotonic()
+    result = SymPyCompiler().compile(parse_dsl(program)["ast"])
+    assert not result.success
+    assert time.monotonic() - start < 5
+
+
+@pytest.mark.parametrize(
+    "program",
+    ["(EQ (POW 0.5 2) 0.25)", "(GT (POW x 1e1000) 1)", "(GT (POW 9 2.5) 1)", "(EQ (POW 1 1e1000) 1)", "(GT (POW 2 10000) 1)"],
+)
+def test_an_ordinary_exact_power_compiles(program):
+    assert SymPyCompiler().compile(parse_dsl(program)["ast"]).success

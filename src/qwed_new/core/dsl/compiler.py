@@ -47,6 +47,27 @@ def _check_pow_cost(base: Any, exponent: Any) -> None:
             raise ValueError("POW demands unbounded exact-integer expansion")
 
 
+def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
+    """Reject an exact power of two SymPy numbers beyond the same bounds.
+
+    SymPy expands such a power in full. A decimal is an exact Rational since
+    #636, not a Float of fixed precision, so (POW 0.5 10000000000) would build
+    a denominator of three billion digits; an integer base had no bound here
+    at all. Powers with a symbol stay symbolic and are not bounded.
+    """
+    if not (isinstance(base, sympy.Rational) and isinstance(exponent, sympy.Rational)):
+        return
+    if base in (0, 1, -1):
+        return
+    if abs(exponent.p) > _MAX_POW_EXPONENT:
+        raise ValueError(
+            f"POW exponent exceeds the maximum magnitude of {_MAX_POW_EXPONENT}"
+        )
+    digits = len(str(abs(base.p))) + len(str(base.q))
+    if digits * abs(exponent.p) > _MAX_POW_EXPANSION_DIGITS:
+        raise ValueError("POW demands unbounded exact expansion")
+
+
 def _is_quoted_literal(token: str) -> bool:
     """True if a token is a quoted string literal (parser keeps the quotes)."""
     return len(token) >= 2 and token[0] in ("'", '"') and token[-1] == token[0]
@@ -417,6 +438,7 @@ class SymPyCompiler:
         elif operator == 'DIV':
             return compiled_args[0] / compiled_args[1]
         elif operator == 'POW':
+            _check_exact_pow_cost(compiled_args[0], compiled_args[1])
             return compiled_args[0] ** compiled_args[1]
         elif operator == 'MOD':
             return sympy.Mod(compiled_args[0], compiled_args[1])
