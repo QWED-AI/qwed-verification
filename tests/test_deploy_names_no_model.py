@@ -113,11 +113,14 @@ def _shipped_in(texts):
         elif isinstance(node, dict):
             metadata = node.get("metadata")
             if node.get("kind") in ("Secret", "ConfigMap") and isinstance(metadata, dict):
-                # One resource: stringData overrides data, as Kubernetes
-                # merges them, even with an empty value. Its data holds
-                # values, not resources, so the walk does not go into it.
+                # One resource: a Secret's stringData overrides its data, as
+                # Kubernetes merges them, even with an empty value; a
+                # ConfigMap has data and binaryData, and no stringData. Its
+                # data holds values, not resources, so the walk does not go
+                # into it.
                 values = {}
-                for field in ("data", "stringData"):
+                fields = ("data", "stringData") if node["kind"] == "Secret" else ("data", "binaryData")
+                for field in fields:
                     if isinstance(node.get(field), dict):
                         values.update(node[field])
                 merged = shipped.setdefault((node["kind"], metadata.get("name")), {})
@@ -338,6 +341,10 @@ def test_a_key_that_deploy_ships_is_read_as_written(shipped_value, settings):
 @pytest.mark.parametrize("text, shipped", [
     # stringData overrides data within one Secret, even when empty.
     ("kind: Secret\nmetadata: {name: s}\ndata: {K: Y3VzdG9t}\nstringData: {K: ''}\n", {("Secret", "s"): {"K": ""}}),
+    # A ConfigMap has no stringData: an empty one there hides nothing.
+    ("kind: ConfigMap\nmetadata: {name: c}\ndata: {K: custom-v1}\nstringData: {K: ''}\n",
+     {("ConfigMap", "c"): {"K": "custom-v1"}}),
+    ("kind: ConfigMap\nmetadata: {name: c}\nbinaryData: {K: Y3VzdG9t}\n", {("ConfigMap", "c"): {"K": "Y3VzdG9t"}}),
     # A ConfigMap's data that looks like a resource is still data.
     ("kind: ConfigMap\nmetadata: {name: c}\ndata: {kind: ConfigMap, data: x}\n",
      {("ConfigMap", "c"): {"kind": "ConfigMap", "data": "x"}}),
