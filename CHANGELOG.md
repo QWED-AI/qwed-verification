@@ -18,13 +18,11 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   any other repository as well), and switching releases does not touch it.
   A cluster that has the Secret keeps it, since `kubectl apply` does not
   delete it. If you filled in the tracked `secret.yaml`, git will not pull
-  while it has local changes, staged or not: save the working copy out of
-  the checkout, readable only by you, and if you staged a different
-  version, save that too without printing it, into a new file readable
-  only by you; `set -C` refuses to overwrite a file that already exists,
-  such as an earlier backup
-  (`(set -C; umask 077; git show :deploy/kubernetes/secret.yaml > ../qwed-secret.staged.yaml)`);
-  then run
+  while it has local changes, staged or not. First save your values
+  outside the checkout, where only you can read them, without overwriting
+  an earlier backup: the working copy, and a staged version if it differs
+  (`git show :deploy/kubernetes/secret.yaml` writes it to standard output,
+  so redirect it into such a file rather than to the terminal). Then run
   `git restore --source=HEAD --staged --worktree deploy/kubernetes/secret.yaml`
   and pull. Git still ignores that path, but do not keep a filled-in copy
   there if you check out older releases: they track it with empty values,
