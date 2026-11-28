@@ -12,12 +12,14 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   rule protected nothing: a filled-in copy was committed like any other
   change. `kubectl apply -f deploy/kubernetes/` does not apply the template,
   whose name does not end in `.yaml`. Copy it outside the checkout with
-  `cp -n`, fill it in there and apply it after the directory, as the
-  template's header shows: a copy outside the checkout is never committed,
-  and switching releases does not touch it. A cluster that has the Secret
-  keeps it, since `kubectl apply` does not delete it. If you filled in the
-  tracked `secret.yaml`, git will not pull while it has local changes: copy
-  it out of the checkout, run `git restore deploy/kubernetes/secret.yaml`,
+  `cp -n`, make the copy readable only by you (`chmod 600`), fill it in
+  there and apply it after the directory, as the template's header shows:
+  this repository never commits a copy outside its checkout (keep it out of
+  any other repository as well), and switching releases does not touch it.
+  A cluster that has the Secret keeps it, since `kubectl apply` does not
+  delete it. If you filled in the tracked `secret.yaml`, git will not pull
+  while it has local changes, staged or not: copy it out of the checkout,
+  run `git restore --source=HEAD --staged --worktree deploy/kubernetes/secret.yaml`,
   then pull. Git still ignores that path, but do not keep a filled-in copy
   there if you check out older releases: they track it with empty values,
   and git overwrites an ignored file that the checked-out release tracks

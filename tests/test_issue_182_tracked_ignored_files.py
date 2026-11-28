@@ -89,17 +89,48 @@ def test_the_template_is_a_secret_under_a_name_kubectl_does_not_apply():
     assert yaml.safe_load(TEMPLATE.read_text(encoding="utf-8"))["kind"] == "Secret"
 
 
-def test_the_template_copies_without_overwriting_a_filled_in_copy():
+def _header_commands(verb):
+    # The header's commands are the comment lines indented by three spaces;
+    # its prose lines are not.
     commands = [
-        line.lstrip("#").strip()
+        line[len("#   "):].strip()
         for line in TEMPLATE.read_text(encoding="utf-8").splitlines()
-        if line.lstrip("#").strip().startswith("cp ")
+        if line.startswith("#   ")
     ]
+    return [command for command in commands if command.startswith(verb + " ")]
+
+
+def _outside_the_checkout(destination):
+    # The header's commands run from the repository root.
+    path = (ROOT / os.path.expanduser(destination)).resolve()
+    return not path.is_relative_to(ROOT.resolve())
+
+
+def test_the_template_copies_outside_the_checkout_without_overwriting():
+    commands = _header_commands("cp")
 
     assert commands
     for command in commands:
         assert command.startswith("cp -n ")
-        assert not command.split()[-1].startswith("deploy/")
+        assert _outside_the_checkout(command.split()[-1]), command
+
+
+def test_the_template_makes_each_copy_readable_only_by_its_owner():
+    restricted = {command.split()[-1] for command in _header_commands("chmod 600")}
+
+    assert {command.split()[-1] for command in _header_commands("cp")} <= restricted
+
+
+@pytest.mark.parametrize("destination, outside", [
+    ("../qwed-secret.yaml", True),
+    ("../../elsewhere/qwed-secret.yaml", True),
+    ("qwed-secret.yaml", False),
+    ("deploy/kubernetes/secret.yaml", False),
+    ("./deploy/../qwed-secret.yaml", False),
+    ("deploy/../../qwed-secret.yaml", True),
+])
+def test_the_destination_check_resolves_against_the_repository_root(destination, outside):
+    assert _outside_the_checkout(destination) is outside
 
 
 def test_kubectl_applies_no_secret_from_the_repository():
