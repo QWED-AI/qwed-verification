@@ -9,12 +9,18 @@ Dependabot expands glob patterns only under ``directories``; ``directory``
 is a plain path. Matching here is per path segment and case-sensitive, so a
 pattern never matches across a ``/`` and a test on Windows does not ignore
 case. As in Ruby's ``Dir.glob``, which Dependabot uses, ``**`` followed by
-another segment spans any number of directories, while a ``**`` at the end
-matches one segment, like ``*``.
+another segment spans any number of directories, a ``**`` at the end
+matches one segment, like ``*``, and no wildcard matches or crosses a name
+that starts with a dot unless the pattern spells the dot.
+
+The search covers the repository's own files: it skips caches, virtual
+environments and installed packages, and any directory with a ``.git`` of
+its own, which is another checkout (a nested repository or a worktree).
 """
 
 import os
 import re
+import sys
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -24,7 +30,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 # Directories that are not the repository's own files: version control,
 # virtual environments, caches, installed packages and local worktrees.
-# Other dot directories, such as .devcontainer, are searched.
+# Other dot directories, such as .devcontainer, are searched, and so is any
+# other directory without a .git of its own.
 SKIP_PARTS = {
     ".git", ".venv", "venv", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
     ".hypothesis", ".claude", "__pycache__", "node_modules", "site-packages", "build", "dist",
@@ -43,7 +50,10 @@ def _is_dockerfile(name):
 def _dockerfile_directories():
     found = set()
     for directory, subdirectories, files in os.walk(ROOT):
-        subdirectories[:] = [d for d in subdirectories if d not in SKIP_PARTS]
+        subdirectories[:] = [
+            d for d in subdirectories
+            if d not in SKIP_PARTS and not (Path(directory) / d / ".git").exists()
+        ]
         if any(_is_dockerfile(name) for name in files):
             parent = Path(directory).relative_to(ROOT).as_posix()
             found.add("/" if parent == "." else "/" + parent)
@@ -57,13 +67,26 @@ def _segments(path):
 def _glob_covers(directory, pattern):
     names, globs = _segments(directory), _segments(pattern)
 
+    def visible(name, glob):
+        # A wildcard does not match a leading dot unless the pattern has it.
+        return not name.startswith(".") or glob.startswith(".")
+
     def match(i, j):
         if j == len(globs):
             return i == len(names)
         if globs[j] == "**" and j + 1 < len(globs):
-            return any(match(k, j + 1) for k in range(i, len(names) + 1))
+            return any(
+                match(k, j + 1)
+                for k in range(i, len(names) + 1)
+                if all(not name.startswith(".") for name in names[i:k])
+            )
         segment = "*" if globs[j] == "**" else globs[j]
-        return i < len(names) and fnmatchcase(names[i], segment) and match(i + 1, j + 1)
+        return (
+            i < len(names)
+            and visible(names[i], segment)
+            and fnmatchcase(names[i], segment)
+            and match(i + 1, j + 1)
+        )
 
     return match(0, 0)
 
@@ -100,6 +123,11 @@ def test_dockerfile_names(name, dockerfile):
     ("/docker", {"directories": ["/**/*"]}, True),
     ("/docker/crosshair-sandbox", {"directories": ["/**"]}, False),
     ("/docker", {"directories": ["/**"]}, True),
+    ("/.devcontainer", {"directories": ["/*"]}, False),
+    ("/.devcontainer", {"directories": ["/**/*"]}, False),
+    ("/.devcontainer/sub", {"directories": ["/**/sub"]}, False),
+    ("/.devcontainer", {"directories": ["/.devcontainer"]}, True),
+    ("/.devcontainer", {"directories": ["/.*"]}, True),
     ("/docker/crosshair-sandbox", {"directory": "/docker/*"}, False),
     ("/docker/crosshair-sandbox", {"directories": ["/*"]}, False),
     ("/docker/crosshair-sandbox", {"directories": ["/docker*"]}, False),
@@ -108,6 +136,18 @@ def test_dockerfile_names(name, dockerfile):
 ])
 def test_coverage_matching(directory, entry, covered):
     assert _covered(directory, [entry]) is covered
+
+
+def test_the_search_skips_another_checkout_inside_the_repository(tmp_path, monkeypatch):
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    for sub in ("worktrees/topic", "nested", ".devcontainer"):
+        (tmp_path / sub).mkdir(parents=True)
+        (tmp_path / sub / "Dockerfile").write_text("FROM scratch\n")
+    (tmp_path / "worktrees" / "topic" / ".git").write_text("gitdir: elsewhere\n")
+    (tmp_path / "nested" / ".git").mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+
+    assert _dockerfile_directories() == {"/", "/.devcontainer"}
 
 
 def test_the_repository_has_both_dockerfiles():

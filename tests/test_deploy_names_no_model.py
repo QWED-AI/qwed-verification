@@ -48,6 +48,7 @@ LINE = re.compile(
 # ${NAME}, ${NAME:?message}, ${NAME?message}, ${NAME:-} or ${NAME-}: never a
 # default after :- or -.
 FROM_ENVIRONMENT = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*(?::?\?[^}]*|:?-)?\}$")
+COMPOSE_TAG = re.compile(r"(?<!\S)!(?:reset|override)(?!\S)")
 # A Kubernetes dependent variable: $(NAME). $$(NAME) is a literal.
 KUBERNETES_REFERENCE = re.compile(r"^\$\(([A-Za-z_][A-Za-z0-9_]*)\)$")
 
@@ -116,6 +117,10 @@ def _settings_in(name, text):
     if ".yaml" in name or ".yml" in name:
         # A YAML file that does not parse fails the test, rather than being
         # read line by line, which would miss a name/value env entry.
+        # Compose's merge tags, !reset and !override, mark how a value
+        # combines with another file; the value itself is plain YAML.
+        if "compose" in name:
+            text = COMPOSE_TAG.sub("", text)
         for document in yaml.safe_load_all(text):
             _walk(document, found, SUBSTITUTES if "compose" in name else LITERAL)
         return found
@@ -165,6 +170,10 @@ def _deploy_files():
       "  - name: B\n    value: $(A)\n  - name: OPENAI_MODEL\n    value: $(B)\n"),
      [("OPENAI_MODEL", "$(B)", (KUBERNETES_ENV, ("A", "B")))]),
     ("docker-compose.yml", "env:\n  model: custom-v1\n", [("model", "custom-v1", SUBSTITUTES)]),
+    ("docker-compose.yml", "environment: !override\n  - OPENAI_MODEL=custom-v1\nports: !reset []\n",
+     [("OPENAI_MODEL", "custom-v1", SUBSTITUTES)]),
+    ("docker-compose.yml", "environment: !reset\n  OPENAI_MODEL: !override custom-v1\n",
+     [("OPENAI_MODEL", "custom-v1", SUBSTITUTES)]),
     ("docker-compose.yml", "e:\n  - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}\n  - GEMINI_MODEL\n",
      [("OPENAI_MODEL", "${OPENAI_MODEL:-gpt-4o}", SUBSTITUTES), ("GEMINI_MODEL", None, SUBSTITUTES)]),
     (".env.example", "OPENAI_MODEL=\nPORT=8000\n", [("OPENAI_MODEL", "", SUBSTITUTES)]),
