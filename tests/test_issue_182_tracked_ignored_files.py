@@ -89,15 +89,18 @@ def test_the_template_is_a_secret_under_a_name_kubectl_does_not_apply():
     assert yaml.safe_load(TEMPLATE.read_text(encoding="utf-8"))["kind"] == "Secret"
 
 
-def _header_commands(verb):
-    # The header's commands are the comment lines indented by three spaces;
-    # its prose lines are not.
-    commands = [
+def _header_steps():
+    # The header's steps are the comment lines indented by three spaces; its
+    # prose lines are not.
+    return [
         line[len("#   "):].strip()
         for line in TEMPLATE.read_text(encoding="utf-8").splitlines()
         if line.startswith("#   ")
     ]
-    return [command for command in commands if command.startswith(verb + " ")]
+
+
+def _header_commands(verb):
+    return [step for step in _header_steps() if step.startswith(verb + " ")]
 
 
 def _outside_the_checkout(destination):
@@ -115,10 +118,15 @@ def test_the_template_copies_outside_the_checkout_without_overwriting():
         assert _outside_the_checkout(command.split()[-1]), command
 
 
-def test_the_template_makes_each_copy_readable_only_by_its_owner():
-    restricted = {command.split()[-1] for command in _header_commands("chmod 600")}
-
-    assert {command.split()[-1] for command in _header_commands("cp")} <= restricted
+def test_the_template_makes_each_copy_owner_only_before_it_is_filled_in():
+    steps = _header_steps()
+    for copy in _header_commands("cp"):
+        destination = copy.split()[-1]
+        uses = [i for i, step in enumerate(steps) if destination in step.split() or f"in {destination})" in step]
+        # Right after the copy, before the step that fills it in and before
+        # any other use of the file.
+        assert steps[uses[0]] == copy
+        assert steps[uses[1]] == f"chmod 600 {destination}"
 
 
 @pytest.mark.parametrize("destination, outside", [
