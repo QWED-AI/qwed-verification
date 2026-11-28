@@ -97,18 +97,33 @@ def _secret_or_config_map(source, shipped):
 
 def _shipped_in(texts):
     """The Secrets and ConfigMaps the deployment files ship, as
-    {(kind, name): {key: value}}, from (file name, text) pairs."""
+    {(kind, name): {key: value}}, from (file name, text) pairs.
+
+    Every Secret and ConfigMap counts, at any depth (a kind: List included)
+    and in any namespace, and a key written with a value in any of them wins
+    over the same key shipped empty elsewhere. So the check may call a
+    reference written text when another namespace's copy has the value, but
+    never takes a written value for the operator's."""
     shipped = {}
-    for name, text in texts:
-        if ".yaml" not in name and ".yml" not in name:
-            continue
-        for document in yaml.safe_load_all(_untagged(name, text)):
-            if isinstance(document, dict) and document.get("kind") in ("Secret", "ConfigMap"):
-                values = {}
+
+    def collect(node):
+        if isinstance(node, dict):
+            if node.get("kind") in ("Secret", "ConfigMap"):
+                values = shipped.setdefault((node["kind"], (node.get("metadata") or {}).get("name")), {})
                 for field in ("data", "stringData"):
-                    if isinstance(document.get(field), dict):
-                        values.update(document[field])
-                shipped[(document["kind"], (document.get("metadata") or {}).get("name"))] = values
+                    for key, value in (node.get(field) or {}).items():
+                        if values.get(key) in (None, ""):
+                            values[key] = value
+            for value in node.values():
+                collect(value)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    for name, text in texts:
+        if ".yaml" in name or ".yml" in name:
+            for document in yaml.safe_load_all(_untagged(name, text)):
+                collect(document)
     return shipped
 
 
@@ -310,6 +325,22 @@ def test_a_key_that_deploy_ships_is_read_as_written(shipped_value, settings):
     manifest = "env:\n  - name: OPENAI_MODEL\n    valueFrom: {configMapKeyRef: {name: c, key: CHOICE}}\n"
 
     assert _settings_in("deployment.yaml", manifest, shipped) == settings
+
+
+@pytest.mark.parametrize("files", [
+    # Two namespaces: the written value wins over the empty one, either order.
+    [("a.yaml", "kind: ConfigMap\nmetadata: {name: c, namespace: one}\ndata: {CHOICE: ''}\n"),
+     ("b.yaml", "kind: ConfigMap\nmetadata: {name: c, namespace: two}\ndata: {CHOICE: custom-v1}\n")],
+    [("a.yaml", "kind: ConfigMap\nmetadata: {name: c, namespace: two}\ndata: {CHOICE: custom-v1}\n"),
+     ("b.yaml", "kind: ConfigMap\nmetadata: {name: c, namespace: one}\ndata: {CHOICE: ''}\n")],
+    # A ConfigMap inside a kind: List.
+    [("list.yaml", "kind: List\nitems:\n  - kind: ConfigMap\n    metadata: {name: c}\n    data: {CHOICE: custom-v1}\n")],
+])
+def test_a_written_value_anywhere_in_deploy_counts(files):
+    shipped = _shipped_in(files)
+    manifest = "env:\n  - name: OPENAI_MODEL\n    valueFrom: {configMapKeyRef: {name: c, key: CHOICE}}\n"
+
+    assert _settings_in("deployment.yaml", manifest, shipped) == [("OPENAI_MODEL", "custom-v1", LITERAL)]
 
 
 def test_a_reference_to_a_key_that_deploy_ships_with_a_value_is_written_text():
