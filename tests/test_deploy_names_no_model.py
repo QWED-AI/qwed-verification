@@ -75,18 +75,16 @@ def _unquote(value):
     return re.sub(r"(?:^|[ \t]+)#.*$", "", value).strip(), SUBSTITUTES
 
 
-def _from_secret_or_config_map(source):
-    """Whether a valueFrom reads a required Secret or ConfigMap key. A
-    fieldRef or resourceFieldRef reads the pod's own manifest or limits, and
-    an optional key may be absent."""
+def _secret_or_config_map(source):
+    """"required" or "optional" for a valueFrom that reads a Secret or
+    ConfigMap key, else None. A fieldRef or resourceFieldRef reads the pod's
+    own manifest or limits."""
     if not isinstance(source, dict) or len(source) != 1:
-        return False
+        return None
     kind, selector = next(iter(source.items()))
-    return (
-        kind in ("secretKeyRef", "configMapKeyRef")
-        and isinstance(selector, dict)
-        and selector.get("optional") is not True
-    )
+    if kind not in ("secretKeyRef", "configMapKeyRef") or not isinstance(selector, dict):
+        return None
+    return "optional" if selector.get("optional") is True else "required"
 
 
 def _walk(node, found, context):
@@ -110,16 +108,20 @@ def _walk(node, found, context):
                     found.append((name, item.get("value"), here if context == LITERAL else context))
                 # A later $(NAME) may refer to this entry only when its own
                 # value is not written here: a required Secret or ConfigMap
-                # key, or itself an allowed reference. An optional key may be
-                # absent, and then Kubernetes leaves $(NAME) as it is. A
-                # later entry with the same name replaces the earlier value,
-                # so it replaces the earlier standing too.
-                if name in defined:
-                    defined.remove(name)
-                if _from_secret_or_config_map(item.get("valueFrom")) or (
-                    "value" in item and item["value"] not in (None, "") and _allowed(item["value"], here)
-                ):
-                    defined.append(name)
+                # key, or itself an allowed reference. A later entry with the
+                # same name replaces the earlier value, so it replaces the
+                # earlier standing too. An optional key is the exception: when
+                # it is absent the earlier value stays, and when present it is
+                # the operator's, so it keeps whatever standing NAME had (none,
+                # if nothing above defines NAME: then $(NAME) stays as it is).
+                source = _secret_or_config_map(item.get("valueFrom"))
+                if source != "optional":
+                    if name in defined:
+                        defined.remove(name)
+                    if source == "required" or (
+                        "value" in item and item["value"] not in (None, "") and _allowed(item["value"], here)
+                    ):
+                        defined.append(name)
                 _walk(item, found, context)
             else:
                 _walk(item, found, context)
@@ -192,6 +194,11 @@ def _deploy_files():
      ("env:\n  - name: A\n    valueFrom: {secretKeyRef: {name: s, key: k}}\n"
       "  - name: A\n    value: custom-v1\n  - name: OPENAI_MODEL\n    value: $(A)\n"),
      [("OPENAI_MODEL", "$(A)", (KUBERNETES_ENV, ()))]),
+    ("deployment.yaml",
+     ("env:\n  - name: A\n    valueFrom: {secretKeyRef: {name: s, key: k}}\n"
+      "  - name: A\n    valueFrom: {configMapKeyRef: {name: c, key: k, optional: true}}\n"
+      "  - name: OPENAI_MODEL\n    value: $(A)\n"),
+     [("OPENAI_MODEL", "$(A)", (KUBERNETES_ENV, ("A",)))]),
     ("docker-compose.yml", "environment: &env !override\n  - OPENAI_MODEL=custom-v1\n",
      [("OPENAI_MODEL", "custom-v1", SUBSTITUTES)]),
     ("docker-compose.yml", "env:\n  model: custom-v1\n", [("model", "custom-v1", SUBSTITUTES)]),
