@@ -12,7 +12,8 @@
 # The image is never pulled at runtime; if it is missing, symbolic
 # verification returns BLOCKED (symbolic_verifier.runtime_unavailable).
 
-# Same pinned base as the main QWED image.
+# Python 3.14, pinned by digest. crosshair-tool 0.0.101 has no Python 3.15
+# wheel, so this image stays on 3.14 while the main QWED image runs 3.15.
 FROM python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -6,8 +6,8 @@
 #   action  The GitHub Action (action_entrypoint.py). action.yml builds this
 #           file without a target, so the Action stage must stay last.
 #
-# Base: python:3.14-slim-bookworm, pinned by digest.
-FROM python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56 AS base
+# Base: python:3.15-slim-bookworm, pinned by digest.
+FROM python:3.15-slim-bookworm@sha256:4e03260adeeebafccd084f3584e6b84823aba5651cfb53ef8a078ed441ddf9cd AS base
 
 # Environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -23,8 +23,11 @@ RUN pip install --no-cache-dir --upgrade "pip>=25.0" "wheel>=0.46.2"
 # ============== API SERVER ==============
 FROM base AS server
 
-# Every dependency of the server, hash-pinned for Linux and Python 3.14
-# (generated from pyproject.toml with the [server] extra; see the file header).
+# Every dependency of the server, hash-pinned for Linux and resolved for
+# Python 3.14 (generated from pyproject.toml with the [server] extra; see the
+# file header). PyYAML 6.0.3 has no Python 3.15 wheel, so pip builds it from
+# its hash-pinned sdist, and the lock can't be resolved for 3.15 with
+# --only-binary until PyYAML publishes one.
 COPY requirements-server.txt /app/requirements-server.txt
 RUN pip install --no-cache-dir --require-hashes -r /app/requirements-server.txt \
     && useradd --create-home --uid 1000 qwed \
