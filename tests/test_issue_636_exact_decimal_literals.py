@@ -174,8 +174,10 @@ def test_the_process_limit_for_integer_text_lowers_the_bound():
         ("3e-4000", False),
         ("5555555555e-4005", False),
         # A 4,001-digit even coefficient over 10 reduces to 4,000 digits over 5.
-        (str(10**4000 + 2) + "e-1", True),
-        (str(10**4000 + 1) + "e-1", False),
+        # Written as text, not str(int): a lower int text limit must not stop
+        # the file being collected.
+        ("1" + "0" * 3999 + "2e-1", True),
+        ("1" + "0" * 3999 + "1e-1", False),
     ],
 )
 def test_the_size_of_a_literal_is_bounded(text, allowed):
