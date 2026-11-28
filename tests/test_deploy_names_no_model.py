@@ -170,8 +170,12 @@ def _walk(node, found, context, shipped):
                 if SETTING_KEY.search(name) and ("value" in item or "valueFrom" in item):
                     # An env entry; valueFrom reads a Secret or a ConfigMap,
                     # and one that deploy/ ships reads the text written there.
+                    # Any other valueFrom (fieldRef, resourceFieldRef) reads
+                    # the pod's own manifest, so it is not the operator's.
                     if source == "shipped":
                         found.append((name, shipped_value, LITERAL))
+                    elif "valueFrom" in item and source is None:
+                        found.append((name, f"valueFrom: {item['valueFrom']}", LITERAL))
                     else:
                         found.append((name, item.get("value"), here if context == LITERAL else context))
                 # A later $(NAME) may refer to this entry only when its own
@@ -190,6 +194,19 @@ def _walk(node, found, context, shipped):
                         "value" in item and item["value"] not in (None, "") and _allowed(item["value"], here)
                     ):
                         defined.append(name)
+                _walk(item, found, context, shipped)
+            elif isinstance(item, dict) and ("configMapRef" in item or "secretRef" in item):
+                # An envFrom entry imports every key of a ConfigMap or
+                # Secret, each under the prefix: for one that deploy/
+                # ships, check the names the container gets.
+                kind, ref = (
+                    ("ConfigMap", item["configMapRef"]) if "configMapRef" in item else ("Secret", item["secretRef"])
+                )
+                prefix = item.get("prefix") or ""
+                ref_name = ref.get("name") if isinstance(ref, dict) else None
+                for key, value in shipped.get((kind, ref_name), {}).items():
+                    if SETTING_KEY.search(f"{prefix}{key}"):
+                        found.append((f"{prefix}{key}", value, LITERAL))
                 _walk(item, found, context, shipped)
             else:
                 _walk(item, found, context, shipped)
@@ -383,6 +400,23 @@ def test_a_written_value_anywhere_in_deploy_counts(files):
     assert _settings_in("deployment.yaml", manifest, shipped) == [("OPENAI_MODEL", "custom-v1", LITERAL)]
 
 
+@pytest.mark.parametrize("manifest, settings", [
+    # envFrom with a prefix: L becomes OPENAI_MODEL in the container.
+    ("envFrom:\n  - prefix: OPENAI_MODE\n    configMapRef: {name: c}\n", [("OPENAI_MODEL", "custom-v1", LITERAL)]),
+    ("envFrom:\n  - configMapRef: {name: c}\n", []),
+    ("envFrom:\n  - prefix: OPENAI_MODE\n    configMapRef: {name: elsewhere}\n", []),
+    # A direct model setting read from the pod's own labels.
+    ("env:\n  - name: OPENAI_MODEL\n    valueFrom: {fieldRef: {fieldPath: \"metadata.labels['chosen']\"}}\n",
+     [("OPENAI_MODEL", "valueFrom: {'fieldRef': {'fieldPath': \"metadata.labels['chosen']\"}}", LITERAL)]),
+])
+def test_env_from_and_unsupported_sources(manifest, settings):
+    shipped = _shipped_in([("configmap.yaml", "kind: ConfigMap\nmetadata: {name: c}\ndata: {L: custom-v1}\n")])
+    found = _settings_in("deployment.yaml", manifest, shipped)
+
+    assert found == settings
+    assert not any(_allowed(value, context) for _, value, context in found)
+
+
 def test_a_reference_to_a_key_that_deploy_ships_with_a_value_is_written_text():
     shipped = _shipped_in([("secret.yaml", "kind: Secret\nmetadata: {name: s}\nstringData: {K: custom-v1}\n")])
     manifest = (
@@ -407,11 +441,30 @@ def test_every_model_setting_is_empty_or_refers_to_another_variable():
     assert [s for s in settings if not _allowed(s[2], s[3])] == []
 
 
+def _without_variable_names(text):
+    # ${MY_GPT4_MODEL} and $(MY_GPT4_MODEL) name a variable the operator
+    # sets, not a model; a default after :- stays, so ${X:-gpt-4o} is read.
+    return VARIABLE_NAME.sub(r"\1", text)
+
+
+VARIABLE_NAME = re.compile(r"(\$[{(])[A-Za-z_][A-Za-z0-9_]*")
+
+
+@pytest.mark.parametrize("text, names", [
+    ("OPENAI_MODEL=${MY_GPT4_MODEL}\n", []),
+    ("value: $(MY_GPT4_MODEL)\n", []),
+    ("OPENAI_MODEL=${MY_MODEL:-gpt-4o}\n", ["gpt-4"]),
+    ("model: gpt-4\n", ["gpt-4"]),
+])
+def test_the_name_scan_skips_variable_names_only(text, names):
+    assert [m.group(0) for m in MODEL_NAME.finditer(_without_variable_names(text))] == names
+
+
 def test_no_deployment_file_names_a_model():
     found = [
         (path.relative_to(ROOT).as_posix(), match.group(0))
         for path in _deploy_files()
-        for match in MODEL_NAME.finditer(path.read_text(encoding="utf-8", errors="replace"))
+        for match in MODEL_NAME.finditer(_without_variable_names(path.read_text(encoding="utf-8", errors="replace")))
     ]
 
     assert found == []
