@@ -18,7 +18,7 @@ from hypothesis import strategies as st
 from z3 import Real, RealVal, is_false, is_true, simplify
 
 from qwed_new.core import z3_exact
-from qwed_new.core.decimal_literal import MAX_DECIMAL_DIGITS, MAX_DECIMAL_TEXT, exact_decimal, reads_as_decimal
+from qwed_new.core.decimal_literal import MAX_DECIMAL_DIGITS, MAX_DECIMAL_TEXT, exact_decimal, names_a_non_finite_number
 from qwed_new.core.dsl import parse_and_validate as parse_dsl
 from qwed_new.core.dsl.compiler import SymPyCompiler
 from qwed_new.core.dsl.parser import QWEDLogicDSL, parse_and_validate
@@ -87,18 +87,24 @@ def test_an_integer_stays_an_int():
     assert type(atom) is int
 
 
-@pytest.mark.parametrize("text", ["sNaN", "-sNaN", "snan", "+sNaN"])
+@pytest.mark.parametrize("text", ["sNaN", "-sNaN", "snan", "+sNaN", "sNaN123", "NaN5"])
 def test_a_signalling_nan_is_refused_not_taken_as_a_name(text):
     # float() does not read sNaN, but the decimal grammar does.
-    assert reads_as_decimal(text)
+    assert names_a_non_finite_number(text)
     with pytest.raises(ValueError):
         exact_decimal(text)
     assert parse_and_validate(f"(GT x {text})")["status"] == "PARSE_ERROR"
 
 
-@pytest.mark.parametrize("text", ["x", "rate", "e", "E5", "nan_count", "_1x"])
-def test_a_name_is_not_a_decimal(text):
-    assert not reads_as_decimal(text)
+@pytest.mark.parametrize("text", ["x", "rate", "e", "E5", "nan_count", "_1x", "_1", "_", "__x", "_1_000", "info", "nano"])
+def test_a_name_stays_a_name(text):
+    # The decimal grammar skips underscores and would read "_1" as 1.
+    assert not names_a_non_finite_number(text)
+    assert QWEDLogicDSL()._parse_atom(text) == text
+
+
+def test_a_name_like_underscore_one_is_a_variable(dsl):
+    assert dsl.verify_from_dsl("(GT _1 5)", [{"name": "_1", "type": "Int"}]).status == "SAT"
 
 
 @pytest.mark.parametrize("text", ["abc", "", "1.2.3", "0x10"])
@@ -352,8 +358,9 @@ def test_a_literal_after_a_non_ascii_name_keeps_its_text():
 
 
 def test_a_float_node_without_a_position_is_refused():
+    transformer, node = _ExactArithmetic("x"), ast.Constant(0.5)
     with pytest.raises(ValueError):
-        _ExactArithmetic("x").visit(ast.Constant(0.5))
+        transformer.visit(node)
 
 
 # --- the SymPy compiler bounds exact powers -----------------------------------
@@ -367,6 +374,13 @@ def test_a_float_node_without_a_position_is_refused():
         "(GT (POW 9 (POW 9 9)) 1)",
         "(GT (POW 1.5 10001) 1)",
         "(GT (POW (POW 9.0 10000.0) 10000.0) 1)",
+        "(GT (POW 9 1000000.5) 1)",
+        # A fractional part asks SymPy for an exact root.
+        "(GT (POW 2 1e-3999) 1)",
+        "(GT (POW 2 1e-20) 1)",
+        "(GT (POW " + "9" * 3999 + ".0 0.5) 1)",
+        "(GT (POW " + "9" * 3999 + " 0.75) 1)",
+        "(GT (POW " + "7" * 1000 + " 0.5) 1)",
     ],
 )
 def test_a_huge_exact_power_is_refused_quickly(program):
@@ -378,7 +392,60 @@ def test_a_huge_exact_power_is_refused_quickly(program):
 
 @pytest.mark.parametrize(
     "program",
-    ["(EQ (POW 0.5 2) 0.25)", "(GT (POW x 1e1000) 1)", "(GT (POW 9 2.5) 1)", "(EQ (POW 1 1e1000) 1)", "(GT (POW 2 10000) 1)"],
+    [
+        "(EQ (POW 0.5 2) 0.25)",
+        "(GT (POW x 1e1000) 1)",
+        "(GT (POW 9 2.5) 1)",
+        "(EQ (POW 1 1e1000) 1)",
+        "(GT (POW 2 10000) 1)",
+        # A fraction's numerator is not its size: 99999/100000 is below one.
+        "(GT (POW 2 0.99999) 1)",
+        "(GT (POW 3 10000.5) 1)",
+        "(EQ (POW 4 0.5) 2)",
+        "(GT (POW 2 1e-19) 1)",
+        "(GT (POW " + "7" * 998 + "9 0.5) 1)",
+    ],
 )
 def test_an_ordinary_exact_power_compiles(program):
     assert SymPyCompiler().compile(parse_dsl(program)["ast"]).success
+
+
+# --- the direct reading of ASCII decimals agrees with Decimal ----------------
+
+_ASCII_DECIMALS = st.builds(
+    lambda sign, whole, point, fraction, exponent: f"{sign}{whole}{point}{fraction}{exponent}",
+    st.sampled_from(["", "-", "+"]),
+    st.one_of(st.just(""), st.integers(min_value=0, max_value=10**30).map(str), st.just("000")),
+    st.sampled_from(["", "."]),
+    st.one_of(st.just(""), st.integers(min_value=0, max_value=10**30).map(lambda n: str(n).zfill(3))),
+    st.one_of(st.just(""), st.integers(min_value=-600, max_value=600).map(lambda e: f"e{e}"),
+              st.integers(min_value=0, max_value=600).map(lambda e: f"E+{e:04d}")),
+)
+
+
+@settings(max_examples=500, deadline=None)
+@given(text=_ASCII_DECIMALS)
+def test_the_direct_reading_agrees_with_decimal(text):
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        expected = Fraction(Decimal(text))
+    except InvalidOperation:
+        expected = None
+    try:
+        got = exact_decimal(text)
+    except ValueError:
+        got = None
+    if expected is not None and got is not None:
+        assert got == expected
+    if expected is None:
+        assert got is None
+
+
+def test_an_exponent_beyond_every_bound_is_refused_quickly():
+    start = time.monotonic()
+    for text in ["1e1234567890123456789", "1e-1234567890123456789", "1e" + "9" * 5000]:
+        with pytest.raises(ValueError):
+            exact_decimal(text)
+    assert exact_decimal("1e" + "0" * 30 + "5") == Fraction(100000)
+    assert time.monotonic() - start < 2

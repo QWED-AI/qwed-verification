@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
 
-from qwed_new.core.decimal_literal import exact_decimal, reads_as_decimal
+from qwed_new.core.decimal_literal import exact_decimal, names_a_non_finite_number
+
+# The first characters of a NaN spelling that float() does not read (sNaN, a
+# NaN with payload digits): other names skip the check.
+_MAYBE_NAN = frozenset("sSnN+-")
 
 
 class OperatorCategory(str, Enum):
@@ -223,11 +227,11 @@ class QWEDLogicDSL:
         # 0.10000000000000001 to 0.1 before anything sees it (#636). A token
         # Python reads as a number stays a number, so ``inf`` and ``nan`` are
         # refused rather than taken as variable names; so is ``sNaN``, which
-        # only the decimal grammar reads.
+        # float() does not read. Names such as ``_1`` stay names.
         try:
             float(token)
         except ValueError:
-            if reads_as_decimal(token):
+            if token[0] in _MAYBE_NAN and names_a_non_finite_number(token):
                 raise ValueError(f"Not a finite number: {token[:40]!r}") from None
             # It's a variable name or operator
             return token

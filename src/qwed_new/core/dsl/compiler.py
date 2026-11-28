@@ -32,6 +32,12 @@ except ImportError:
 # (e.g. (EQ x (POW 9 (POW 9 9)))) expands a huge integer on the request thread.
 _MAX_POW_EXPONENT = 10_000
 _MAX_POW_EXPANSION_DIGITS = 100_000
+# A fractional power of a number makes SymPy look for an exact root of the
+# base, when it is built and again when it is compared: bounded by the base's
+# digits and the root's degree (a 1,000-digit base or a 20-digit degree takes
+# well under a second; a 4,000-digit base or a 300-digit degree does not end).
+_MAX_ROOT_BASE_DIGITS = 1_000
+_MAX_ROOT_DEGREE_DIGITS = 20
 
 
 def _check_pow_cost(base: Any, exponent: Any) -> None:
@@ -53,19 +59,25 @@ def _check_exact_pow_cost(base: Any, exponent: Any) -> None:
     SymPy expands such a power in full. A decimal is an exact Rational since
     #636, not a Float of fixed precision, so (POW 0.5 10000000000) would build
     a denominator of three billion digits; an integer base had no bound here
-    at all. Powers with a symbol stay symbolic and are not bounded.
+    at all. SymPy expands the whole part of the exponent, so that is what is
+    bounded, and (POW 2 0.99999) stays an exact power; a fractional part asks
+    for an exact root, bounded by the base's digits and the root's degree.
+    Powers with a symbol stay symbolic and are not bounded.
     """
     if not (isinstance(base, sympy.Rational) and isinstance(exponent, sympy.Rational)):
         return
     if base in (0, 1, -1):
         return
-    if abs(exponent.p) > _MAX_POW_EXPONENT:
+    whole = abs(exponent.p) // exponent.q
+    if whole > _MAX_POW_EXPONENT:
         raise ValueError(
             f"POW exponent exceeds the maximum magnitude of {_MAX_POW_EXPONENT}"
         )
     digits = len(str(abs(base.p))) + len(str(base.q))
-    if digits * abs(exponent.p) > _MAX_POW_EXPANSION_DIGITS:
+    if digits * whole > _MAX_POW_EXPANSION_DIGITS:
         raise ValueError("POW demands unbounded exact expansion")
+    if exponent.q != 1 and (digits > _MAX_ROOT_BASE_DIGITS or len(str(exponent.q)) > _MAX_ROOT_DEGREE_DIGITS):
+        raise ValueError("POW asks for an exact root of a number too large to compute")
 
 
 def _is_quoted_literal(token: str) -> bool:
