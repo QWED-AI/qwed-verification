@@ -44,8 +44,9 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   or deployment setting under `deploy/` is empty or refers to another
   variable in a form its format substitutes (`${NAME}` with no default in a
   Compose file or a .env value outside single quotes, `$(NAME)` in a
-  Kubernetes env entry that an entry above it defines), and that no file
-  there names a model.
+  Kubernetes env entry when an entry above it takes `NAME` from a Secret
+  or ConfigMap key the operator fills in, not one `deploy/` ships with a
+  value), and that no file there names a model.
 - **Dependabot updates the CrossHair sandbox image** (#184). Its docker entry
   read only the root `Dockerfile`, so `docker/crosshair-sandbox/Dockerfile`,
   which uses the same base image, was left behind. The entry reads both
