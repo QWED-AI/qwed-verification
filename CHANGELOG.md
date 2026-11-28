@@ -41,9 +41,11 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   message names the setting. Pods read the ConfigMap when they start, so
   after changing it run `kubectl rollout restart deployment/qwed-core -n qwed`;
   a pod started before keeps its old value. A test checks that every model
-  or deployment setting under `deploy/` is empty, or taken from the
-  environment where the format substitutes `${NAME}` (Compose and .env
-  files, not Kubernetes manifests), and that no file there names a model.
+  or deployment setting under `deploy/` is empty or refers to another
+  variable in a form its format substitutes (`${NAME}` with no default in a
+  Compose file or a .env value outside single quotes, `$(NAME)` in a
+  Kubernetes env entry that an entry above it defines), and that no file
+  there names a model.
 - **Dependabot updates the CrossHair sandbox image** (#184). Its docker entry
   read only the root `Dockerfile`, so `docker/crosshair-sandbox/Dockerfile`,
   which uses the same base image, was left behind. The entry reads both

@@ -6,15 +6,17 @@
 
 The deciding check is by setting, not by name: every model or deployment
 setting in a deployment file (``MODEL``, ``*_MODEL``, ``*_DEPLOYMENT``,
-``model``, in any case) is empty, or taken from the environment with no
-default where the format substitutes ``${NAME}``: Compose files, and .env
-files outside single quotes. Kubernetes manifests substitute nothing, so
-there ``${NAME}`` is a literal value. YAML files are read as YAML, so a
-quoted key, a lowercase key, a Compose ``environment`` list and a
-Kubernetes ``env`` entry (``name:`` and ``value:``) are all seen; other
-files are read line by line, and a value never runs on to the next line. A
-second check looks for model names anywhere under ``deploy/``; a list of
-names is never complete, so it only backs up the first.
+``model``, in any case) is empty, or refers to another variable in a form
+the format substitutes: ``${NAME}`` with no default in a Compose file or in
+a .env value outside single quotes, and ``$(NAME)`` in a Kubernetes ``env``
+entry when an entry above it in the same list defines ``NAME``. Anything
+else, ``${NAME}`` in a ConfigMap included, is a literal value. YAML files
+are read as YAML, so a quoted key, a lowercase key, a Compose
+``environment`` list and a Kubernetes ``env`` entry (``name:`` with
+``value:`` or ``valueFrom:``) are all seen; other files are read line by
+line, and a value never runs on to the next line. A second check looks for
+model names anywhere under ``deploy/``; a list of names is never complete,
+so it only backs up the first.
 """
 
 import re
@@ -26,6 +28,13 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = ROOT / "deploy"
 
+# Where a setting's value is read: a format that substitutes ${NAME}, one
+# that takes the value as written, or a Kubernetes env entry together with
+# the names the entries above it define.
+SUBSTITUTES = "substitutes"
+LITERAL = "literal"
+KUBERNETES_ENV = "kubernetes-env"
+
 SETTING_KEY = re.compile(
     r"^(?:[a-z0-9]+_)*(?:model|deployment)(?:_[a-z0-9]+)*$", re.IGNORECASE
 )
@@ -35,9 +44,11 @@ LINE = re.compile(
     r"""^[ \t]*(?:-[ \t]*)?(?:export[ \t]+)?(["']?)([A-Za-z_][A-Za-z0-9_]*)\1[ \t]*[:=][ \t]*(.*?)[ \t]*$""",
     re.MULTILINE,
 )
-# Unset, empty, or ${NAME}, ${NAME:?message}, ${NAME?message}, ${NAME:-} or
-# ${NAME-}: never a default after :- or -.
+# ${NAME}, ${NAME:?message}, ${NAME?message}, ${NAME:-} or ${NAME-}: never a
+# default after :- or -.
 FROM_ENVIRONMENT = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*(?::?\?[^}]*|:?-)?\}$")
+# A Kubernetes dependent variable: $(NAME). $$(NAME) is a literal.
+KUBERNETES_REFERENCE = re.compile(r"^\$\(([A-Za-z_][A-Za-z0-9_]*)\)$")
 
 MODEL_NAME = re.compile(
     r"\b(?:gpt-?\d|o[1-9](?:-(?:mini|pro|preview))?\b|claude-\w|gemini-\w|llama-?\d"
@@ -47,44 +58,49 @@ MODEL_NAME = re.compile(
 
 
 def _unquote(value):
-    """A .env scalar as (text, expands): the quoted text if quoted, else the
+    """A .env scalar as (text, context): the quoted text if quoted, else the
     text before a # comment. Single quotes keep ${NAME} as it is."""
     value = value.strip()
     if value[:1] in ("'", '"'):
         end = value.find(value[0], 1)
         if end > 0:
-            return value[1:end], value[0] == '"'
-    return re.sub(r"(?:^|[ \t]+)#.*$", "", value).strip(), True
+            return value[1:end], SUBSTITUTES if value[0] == '"' else LITERAL
+    return re.sub(r"(?:^|[ \t]+)#.*$", "", value).strip(), SUBSTITUTES
 
 
-def _walk(node, found, expands):
+def _walk(node, found, context):
     if isinstance(node, dict):
-        name = node.get("name")
-        if isinstance(name, str) and SETTING_KEY.match(name) and ("value" in node or "valueFrom" in node):
-            # A Kubernetes env entry; valueFrom reads a Secret or a ConfigMap.
-            found.append((name, node.get("value"), expands))
         for key, value in node.items():
             if isinstance(key, str) and SETTING_KEY.match(key) and not isinstance(value, (dict, list)):
-                found.append((key, value, expands))
-            _walk(value, found, expands)
+                found.append((key, value, context))
+            _walk(value, found, context)
     elif isinstance(node, list):
+        defined = []
         for item in node:
             if isinstance(item, str) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*(=|$)", item):
                 key, _, value = item.partition("=")
                 if SETTING_KEY.match(key):
-                    found.append((key, value if "=" in item else None, expands))
+                    found.append((key, value if "=" in item else None, context))
+            elif isinstance(item, dict) and isinstance(item.get("name"), str):
+                name = item["name"]
+                if SETTING_KEY.match(name) and ("value" in item or "valueFrom" in item):
+                    # An env entry; valueFrom reads a Secret or a ConfigMap.
+                    entry = (KUBERNETES_ENV, tuple(defined)) if context == LITERAL else context
+                    found.append((name, item.get("value"), entry))
+                defined.append(name)
+                _walk(item, found, context)
             else:
-                _walk(item, found, expands)
+                _walk(item, found, context)
 
 
 def _settings_in(name, text):
     """The model and deployment settings in one file, as (key, value,
-    expands), where expands says whether the format substitutes ${NAME}."""
+    context)."""
     found = []
     if ".yaml" in name or ".yml" in name:
         try:
             for document in yaml.safe_load_all(text):
-                _walk(document, found, expands="compose" in name)
+                _walk(document, found, SUBSTITUTES if "compose" in name else LITERAL)
             return found
         except yaml.YAMLError:
             found = []
@@ -94,10 +110,16 @@ def _settings_in(name, text):
     return found
 
 
-def _allowed(value, expands):
+def _allowed(value, context):
     if value is None or str(value) == "":
         return True
-    return expands and bool(FROM_ENVIRONMENT.match(str(value)))
+    text = str(value)
+    if context == SUBSTITUTES:
+        return bool(FROM_ENVIRONMENT.match(text))
+    if isinstance(context, tuple) and context[0] == KUBERNETES_ENV:
+        reference = KUBERNETES_REFERENCE.match(text)
+        return bool(reference) and reference.group(1) in context[1]
+    return False
 
 
 def _deploy_files():
@@ -105,36 +127,48 @@ def _deploy_files():
 
 
 @pytest.mark.parametrize("name, text, settings", [
-    ("configmap.yaml", 'data:\n  AZURE_OPENAI_DEPLOYMENT: ""\n', [("AZURE_OPENAI_DEPLOYMENT", "", False)]),
-    ("configmap.yaml", 'data:\n  "ANTHROPIC_MODEL": custom-v1\n', [("ANTHROPIC_MODEL", "custom-v1", False)]),
+    ("configmap.yaml", 'data:\n  AZURE_OPENAI_DEPLOYMENT: ""\n', [("AZURE_OPENAI_DEPLOYMENT", "", LITERAL)]),
+    ("configmap.yaml", 'data:\n  "ANTHROPIC_MODEL": custom-v1\n', [("ANTHROPIC_MODEL", "custom-v1", LITERAL)]),
     ("deployment.yaml", "env:\n  - name: AZURE_OPENAI_DEPLOYMENT\n    value: my-prod-dep\n",
-     [("AZURE_OPENAI_DEPLOYMENT", "my-prod-dep", False)]),
+     [("AZURE_OPENAI_DEPLOYMENT", "my-prod-dep", (KUBERNETES_ENV, ()))]),
     ("deployment.yaml", "env:\n  - name: OPENAI_MODEL\n    valueFrom:\n      secretKeyRef: {name: s, key: k}\n",
-     [("OPENAI_MODEL", None, False)]),
-    ("docker-compose.yml", "env:\n  model: custom-v1\n", [("model", "custom-v1", True)]),
+     [("OPENAI_MODEL", None, (KUBERNETES_ENV, ()))]),
+    ("deployment.yaml",
+     ("env:\n  - name: DEPLOY_NAME\n    valueFrom: {secretKeyRef: {name: s, key: k}}\n"
+      "  - name: AZURE_OPENAI_DEPLOYMENT\n    value: $(DEPLOY_NAME)\n"),
+     [("AZURE_OPENAI_DEPLOYMENT", "$(DEPLOY_NAME)", (KUBERNETES_ENV, ("DEPLOY_NAME",)))]),
+    ("docker-compose.yml", "env:\n  model: custom-v1\n", [("model", "custom-v1", SUBSTITUTES)]),
     ("docker-compose.yml", "e:\n  - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}\n  - GEMINI_MODEL\n",
-     [("OPENAI_MODEL", "${OPENAI_MODEL:-gpt-4o}", True), ("GEMINI_MODEL", None, True)]),
-    (".env.example", "OPENAI_MODEL=\nPORT=8000\n", [("OPENAI_MODEL", "", True)]),
-    (".env.example", "MODEL=my-finetune\n", [("MODEL", "my-finetune", True)]),
-    (".env.example", 'export AZURE_OPENAI_DEPLOYMENT="prod" # ours\n', [("AZURE_OPENAI_DEPLOYMENT", "prod", True)]),
-    (".env.example", "AZURE_OPENAI_DEPLOYMENT= # set it\n", [("AZURE_OPENAI_DEPLOYMENT", "", True)]),
-    (".env.example", "OPENAI_MODEL='${OPENAI_MODEL}'\n", [("OPENAI_MODEL", "${OPENAI_MODEL}", False)]),
+     [("OPENAI_MODEL", "${OPENAI_MODEL:-gpt-4o}", SUBSTITUTES), ("GEMINI_MODEL", None, SUBSTITUTES)]),
+    (".env.example", "OPENAI_MODEL=\nPORT=8000\n", [("OPENAI_MODEL", "", SUBSTITUTES)]),
+    (".env.example", "MODEL=my-finetune\n", [("MODEL", "my-finetune", SUBSTITUTES)]),
+    (".env.example", 'export AZURE_OPENAI_DEPLOYMENT="prod" # ours\n',
+     [("AZURE_OPENAI_DEPLOYMENT", "prod", SUBSTITUTES)]),
+    (".env.example", "AZURE_OPENAI_DEPLOYMENT= # set it\n", [("AZURE_OPENAI_DEPLOYMENT", "", SUBSTITUTES)]),
+    (".env.example", "OPENAI_MODEL='${OPENAI_MODEL}'\n", [("OPENAI_MODEL", "${OPENAI_MODEL}", LITERAL)]),
     (".env.example", "DATABASE_URL=x\nMODELS_DIR=/m\n", []),
 ])
 def test_the_settings_are_read_in_each_format(name, text, settings):
     assert _settings_in(name, text) == settings
 
 
-@pytest.mark.parametrize("value, expands, allowed", [
-    (None, False, True), ("", False, True), ("${AZURE_OPENAI_DEPLOYMENT}", True, True),
-    ("${AZURE_OPENAI_DEPLOYMENT:?set it}", True, True), ("${OPENAI_MODEL:-}", True, True),
-    ("${OPENAI_MODEL-}", True, True),
-    ("${AZURE_OPENAI_DEPLOYMENT}", False, False),
-    ("${OPENAI_MODEL:-gpt-4o}", True, False), ("${OPENAI_MODEL-gpt-4o}", True, False),
-    ("gpt-4", True, False), ("my-deployment", False, False), ("custom-v1", True, False),
+@pytest.mark.parametrize("value, context, allowed", [
+    (None, LITERAL, True), ("", LITERAL, True),
+    ("${AZURE_OPENAI_DEPLOYMENT}", SUBSTITUTES, True),
+    ("${AZURE_OPENAI_DEPLOYMENT:?set it}", SUBSTITUTES, True),
+    ("${OPENAI_MODEL:-}", SUBSTITUTES, True), ("${OPENAI_MODEL-}", SUBSTITUTES, True),
+    ("${AZURE_OPENAI_DEPLOYMENT}", LITERAL, False),
+    ("${OPENAI_MODEL:-gpt-4o}", SUBSTITUTES, False), ("${OPENAI_MODEL-gpt-4o}", SUBSTITUTES, False),
+    ("$(DEPLOY_NAME)", (KUBERNETES_ENV, ("DEPLOY_NAME",)), True),
+    ("$(DEPLOY_NAME)", (KUBERNETES_ENV, ()), False),
+    ("$(DEPLOY_NAME)", LITERAL, False),
+    ("$$(DEPLOY_NAME)", (KUBERNETES_ENV, ("DEPLOY_NAME",)), False),
+    ("${DEPLOY_NAME}", (KUBERNETES_ENV, ("DEPLOY_NAME",)), False),
+    ("gpt-4", SUBSTITUTES, False), ("my-deployment", LITERAL, False),
+    ("custom-v1", (KUBERNETES_ENV, ()), False),
 ])
-def test_the_value_check(value, expands, allowed):
-    assert _allowed(value, expands) is allowed
+def test_the_value_check(value, context, allowed):
+    assert _allowed(value, context) is allowed
 
 
 @pytest.mark.parametrize("text", [
@@ -156,14 +190,14 @@ def test_the_name_pattern_leaves_other_values(text):
     assert not MODEL_NAME.search(f'VALUE: "{text}"')
 
 
-def test_every_model_setting_is_empty_or_from_the_environment():
+def test_every_model_setting_is_empty_or_refers_to_another_variable():
     settings = [
-        (path.relative_to(ROOT).as_posix(), key, value, expands)
+        (path.relative_to(ROOT).as_posix(), key, value, context)
         for path in _deploy_files()
-        for key, value, expands in _settings_in(path.name, path.read_text(encoding="utf-8", errors="replace"))
+        for key, value, context in _settings_in(path.name, path.read_text(encoding="utf-8", errors="replace"))
     ]
 
-    assert ("deploy/kubernetes/configmap.yaml", "AZURE_OPENAI_DEPLOYMENT", "", False) in settings
+    assert ("deploy/kubernetes/configmap.yaml", "AZURE_OPENAI_DEPLOYMENT", "", LITERAL) in settings
     assert [s for s in settings if not _allowed(s[2], s[3])] == []
 
 
