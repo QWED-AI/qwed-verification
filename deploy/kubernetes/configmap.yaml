@@ -4,7 +4,8 @@ metadata:
   name: qwed-config
   namespace: qwed
 data:
-  # NOTE: DATABASE_URL moved to secret.yaml (contains credentials)
+  # NOTE: DATABASE_URL is in the Secret (contains credentials); see
+  # secret.yaml.example
   QWED_CORS_ORIGINS: "http://localhost:3000"
   REDIS_URL: "redis://redis:6379/0"
   ACTIVE_PROVIDER: "azure_openai"

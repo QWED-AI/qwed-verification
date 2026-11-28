@@ -285,7 +285,7 @@ def test_kubernetes_pins_the_first_server_image():
 
 
 def test_the_kubernetes_secret_has_every_server_secret():
-    secret = yaml.safe_load((ROOT / "deploy" / "kubernetes" / "secret.yaml").read_text(encoding="utf-8"))
+    secret = yaml.safe_load((ROOT / "deploy" / "kubernetes" / "secret.yaml.example").read_text(encoding="utf-8"))
     config = yaml.safe_load((ROOT / "deploy" / "kubernetes" / "configmap.yaml").read_text(encoding="utf-8"))
     provided = set(secret["stringData"]) | set(config["data"])
 
@@ -295,7 +295,7 @@ def test_the_kubernetes_secret_has_every_server_secret():
 def test_shipped_secret_and_env_files_hold_no_placeholder_values():
     # A filled-in-looking placeholder passes "is it set?" checks and fails
     # only at runtime; an empty value is refused up front.
-    secret = yaml.safe_load((ROOT / "deploy" / "kubernetes" / "secret.yaml").read_text(encoding="utf-8"))
+    secret = yaml.safe_load((ROOT / "deploy" / "kubernetes" / "secret.yaml.example").read_text(encoding="utf-8"))
     assert all(value == "" for value in secret["stringData"].values())
 
     example = (ROOT / "deploy" / ".env.example").read_text(encoding="utf-8")

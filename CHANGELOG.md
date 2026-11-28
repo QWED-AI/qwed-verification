@@ -5,6 +5,18 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Changed
+
+- **Kubernetes: the Secret template is `deploy/kubernetes/secret.yaml.example`**
+  (#182). `secret.yaml` was tracked although `.gitignore` ignores it, so the
+  rule protected nothing: a filled-in copy was committed like any other
+  change. Copy the template to `secret.yaml` and fill it in there; git
+  ignores that copy, and `kubectl apply -f deploy/kubernetes/` does not apply
+  the template, whose name does not end in `.yaml`. A cluster that has the
+  Secret keeps it, since `kubectl apply` does not delete it. A test now fails
+  when the repository tracks a file its `.gitignore` ignores, and the
+  repository's own secret scan reads the deployment templates as well.
+
 ### Fixed
 
 - **Logic: a decimal literal is the value written** (#636). The DSL parser
