@@ -49,8 +49,11 @@ LINE = re.compile(
 # default after :- or -.
 FROM_ENVIRONMENT = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*(?::?\?[^}]*|:?-)?\}$")
 # Compose's merge tags where YAML puts a tag: right after a key's colon or a
-# list dash. Text after a value's first character is the value itself.
-COMPOSE_TAG = re.compile(r"(?m)((?::|^[ \t]*-)[ \t]+)!(?:reset|override)(?=[ \t]|$)")
+# list dash, or after an anchor there. Text after a value's first character
+# is the value itself.
+COMPOSE_TAG = re.compile(
+    r"(?m)((?::|^[ \t]*-)[ \t]+(?:&[^\s]+[ \t]+)?)!(?:reset|override)(?=[ \t]|$)"
+)
 # A Kubernetes dependent variable: $(NAME). $$(NAME) is a literal.
 KUBERNETES_REFERENCE = re.compile(r"^\$\(([A-Za-z_][A-Za-z0-9_]*)\)$")
 
@@ -72,11 +75,18 @@ def _unquote(value):
     return re.sub(r"(?:^|[ \t]+)#.*$", "", value).strip(), SUBSTITUTES
 
 
-def _optional(source):
-    """Whether a valueFrom source is marked optional anywhere inside it."""
-    if isinstance(source, dict):
-        return source.get("optional") is True or any(_optional(v) for v in source.values())
-    return False
+def _from_secret_or_config_map(source):
+    """Whether a valueFrom reads a required Secret or ConfigMap key. A
+    fieldRef or resourceFieldRef reads the pod's own manifest or limits, and
+    an optional key may be absent."""
+    if not isinstance(source, dict) or len(source) != 1:
+        return False
+    kind, selector = next(iter(source.items()))
+    return (
+        kind in ("secretKeyRef", "configMapKeyRef")
+        and isinstance(selector, dict)
+        and selector.get("optional") is not True
+    )
 
 
 def _walk(node, found, context):
@@ -101,9 +111,12 @@ def _walk(node, found, context):
                 # A later $(NAME) may refer to this entry only when its own
                 # value is not written here: a required Secret or ConfigMap
                 # key, or itself an allowed reference. An optional key may be
-                # absent, and then Kubernetes leaves $(NAME) as it is.
-                source = item.get("valueFrom")
-                if (source is not None and not _optional(source)) or (
+                # absent, and then Kubernetes leaves $(NAME) as it is. A
+                # later entry with the same name replaces the earlier value,
+                # so it replaces the earlier standing too.
+                if name in defined:
+                    defined.remove(name)
+                if _from_secret_or_config_map(item.get("valueFrom")) or (
                     "value" in item and item["value"] not in (None, "") and _allowed(item["value"], here)
                 ):
                     defined.append(name)
@@ -171,6 +184,16 @@ def _deploy_files():
      ("env:\n  - name: A\n    valueFrom: {secretKeyRef: {name: s, key: k}}\n"
       "  - name: B\n    value: $(A)\n  - name: OPENAI_MODEL\n    value: $(B)\n"),
      [("OPENAI_MODEL", "$(B)", (KUBERNETES_ENV, ("A", "B")))]),
+    ("deployment.yaml",
+     ("env:\n  - name: A\n    valueFrom: {fieldRef: {fieldPath: \"metadata.labels['chosen']\"}}\n"
+      "  - name: OPENAI_MODEL\n    value: $(A)\n"),
+     [("OPENAI_MODEL", "$(A)", (KUBERNETES_ENV, ()))]),
+    ("deployment.yaml",
+     ("env:\n  - name: A\n    valueFrom: {secretKeyRef: {name: s, key: k}}\n"
+      "  - name: A\n    value: custom-v1\n  - name: OPENAI_MODEL\n    value: $(A)\n"),
+     [("OPENAI_MODEL", "$(A)", (KUBERNETES_ENV, ()))]),
+    ("docker-compose.yml", "environment: &env !override\n  - OPENAI_MODEL=custom-v1\n",
+     [("OPENAI_MODEL", "custom-v1", SUBSTITUTES)]),
     ("docker-compose.yml", "env:\n  model: custom-v1\n", [("model", "custom-v1", SUBSTITUTES)]),
     ("docker-compose.yml", "environment: !override\n  - OPENAI_MODEL=custom-v1\nports: !reset []\n",
      [("OPENAI_MODEL", "custom-v1", SUBSTITUTES)]),

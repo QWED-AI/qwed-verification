@@ -8,10 +8,11 @@ docker entry reads.
 Dependabot expands glob patterns only under ``directories``; ``directory``
 is a plain path. Matching here is per path segment and case-sensitive, so a
 pattern never matches across a ``/`` and a test on Windows does not ignore
-case. As in Ruby's ``Dir.glob``, which Dependabot uses, ``**`` followed by
-another segment spans any number of directories, a ``**`` at the end
-matches one segment, like ``*``, and no wildcard matches or crosses a name
-that starts with a dot unless the pattern spells the dot.
+case. Dependabot expands a pattern with Ruby's
+``Dir.glob(dir, File::FNM_DOTMATCH)`` (``file_fetcher_command.rb`` in
+dependabot-core): ``**`` followed by another segment spans any number of
+directories, a ``**`` at the end matches one segment, like ``*``, and
+wildcards match names that start with a dot.
 
 The search covers the repository's own files: it skips caches, virtual
 environments and installed packages, and any directory with a ``.git`` of
@@ -67,26 +68,13 @@ def _segments(path):
 def _glob_covers(directory, pattern):
     names, globs = _segments(directory), _segments(pattern)
 
-    def visible(name, glob):
-        # A wildcard does not match a leading dot unless the pattern has it.
-        return not name.startswith(".") or glob.startswith(".")
-
     def match(i, j):
         if j == len(globs):
             return i == len(names)
         if globs[j] == "**" and j + 1 < len(globs):
-            return any(
-                match(k, j + 1)
-                for k in range(i, len(names) + 1)
-                if all(not name.startswith(".") for name in names[i:k])
-            )
+            return any(match(k, j + 1) for k in range(i, len(names) + 1))
         segment = "*" if globs[j] == "**" else globs[j]
-        return (
-            i < len(names)
-            and visible(names[i], segment)
-            and fnmatchcase(names[i], segment)
-            and match(i + 1, j + 1)
-        )
+        return i < len(names) and fnmatchcase(names[i], segment) and match(i + 1, j + 1)
 
     return match(0, 0)
 
@@ -123,9 +111,9 @@ def test_dockerfile_names(name, dockerfile):
     ("/docker", {"directories": ["/**/*"]}, True),
     ("/docker/crosshair-sandbox", {"directories": ["/**"]}, False),
     ("/docker", {"directories": ["/**"]}, True),
-    ("/.devcontainer", {"directories": ["/*"]}, False),
-    ("/.devcontainer", {"directories": ["/**/*"]}, False),
-    ("/.devcontainer/sub", {"directories": ["/**/sub"]}, False),
+    ("/.devcontainer", {"directories": ["/*"]}, True),
+    ("/.devcontainer", {"directories": ["/**/*"]}, True),
+    ("/.devcontainer/sub", {"directories": ["/**/sub"]}, True),
     ("/.devcontainer", {"directories": ["/.devcontainer"]}, True),
     ("/.devcontainer", {"directories": ["/.*"]}, True),
     ("/docker/crosshair-sandbox", {"directory": "/docker/*"}, False),
